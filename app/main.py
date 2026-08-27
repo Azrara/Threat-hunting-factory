@@ -1,0 +1,101 @@
+"""Application entry point."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from .config import settings
+from .database import SessionLocal, init_db
+from .engine.catalog import validate_catalogue
+from .engine.rules import statistics as rule_statistics
+from .routers import admin, auth, catalog, hunts, reports, stats
+from .seed import seed_demo
+
+logger = logging.getLogger("thf")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings.ensure_dirs()
+    init_db()
+    problems = validate_catalogue()
+    if problems:
+        logger.warning("Hypothesis catalogue problems: %s", problems)
+    if settings.seed_demo_data:
+        db = SessionLocal()
+        try:
+            seed_demo(db)
+        finally:
+            db.close()
+    logger.info("Detection library loaded: %s", rule_statistics())
+    yield
+
+
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    description="Hypothesis driven threat hunting automation, from evidence intake to reporting.",
+    lifespan=lifespan,
+)
+
+app.include_router(auth.router)
+app.include_router(catalog.router)
+app.include_router(hunts.router)
+app.include_router(reports.router)
+app.include_router(stats.router)
+app.include_router(admin.router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    errors = exc.errors()
+    cleaned = []
+    for error in errors[:8]:
+        field = ".".join(str(part) for part in error.get("loc", [])[1:]) or "request"
+        cleaned.append({"field": field, "message": str(error.get("msg", "invalid value")),
+                        "type": str(error.get("type", ""))})
+    message = "The request could not be processed"
+    if cleaned:
+        first = cleaned[0]
+        message = first["message"] if first["field"] == "request" else f"{first['field']}: {first['message']}"
+    return JSONResponse(status_code=422, content={"detail": message, "errors": cleaned})
+
+
+@app.get("/api/health")
+def health() -> dict:
+    return {
+        "status": "ok",
+        "application": settings.app_name,
+        "version": settings.app_version,
+        "engine": rule_statistics(),
+    }
+
+
+if settings.web_dir.exists():
+    app.mount("/assets", StaticFiles(directory=settings.web_dir / "assets"), name="assets")
+    app.mount("/css", StaticFiles(directory=settings.web_dir / "css"), name="css")
+    app.mount("/js", StaticFiles(directory=settings.web_dir / "js"), name="js")
+
+    @app.get("/", include_in_schema=False)
+    def index() -> FileResponse:
+        return FileResponse(settings.web_dir / "index.html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str) -> FileResponse:
+        """Serve the single page application for any unmatched route.
+
+        API paths are excluded so that an unknown endpoint returns a proper
+        404 rather than the HTML shell.
+        """
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Unknown endpoint")
+        candidate = settings.web_dir / path
+        if path and candidate.is_file() and candidate.resolve().is_relative_to(settings.web_dir.resolve()):
+            return FileResponse(candidate)
+        return FileResponse(settings.web_dir / "index.html")

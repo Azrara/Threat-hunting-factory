@@ -1,0 +1,157 @@
+"""SQLAlchemy ORM models for the multi tenant threat hunting platform."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .database import Base
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def new_id() -> str:
+    return uuid.uuid4().hex
+
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    industry: Mapped[str] = mapped_column(String(120), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    users: Mapped[list["User"]] = relationship(back_populates="tenant", cascade="all, delete-orphan")
+    hunts: Mapped[list["Hunt"]] = relationship(back_populates="tenant", cascade="all, delete-orphan")
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("tenant_id", "email", name="uq_user_tenant_email"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    email: Mapped[str] = mapped_column(String(200), index=True)
+    full_name: Mapped[str] = mapped_column(String(160), default="")
+    password_hash: Mapped[str] = mapped_column(String(200))
+    role: Mapped[str] = mapped_column(String(32), default="analyst")  # admin, analyst, viewer
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    tenant: Mapped[Tenant] = relationship(back_populates="users")
+
+
+class Hunt(Base):
+    """One execution of a hypothesis against an uploaded evidence archive."""
+
+    __tablename__ = "hunts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    hypothesis_id: Mapped[str] = mapped_column(String(80), index=True)
+    hypothesis_name: Mapped[str] = mapped_column(String(200), default="")
+    hypothesis_category: Mapped[str] = mapped_column(String(80), default="")
+    title: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    # pending, running, completed, failed
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    stage: Mapped[str] = mapped_column(String(120), default="Queued")
+    error: Mapped[str] = mapped_column(Text, default="")
+
+    archive_name: Mapped[str] = mapped_column(String(255), default="")
+    archive_path: Mapped[str] = mapped_column(String(500), default="")
+    archive_bytes: Mapped[int] = mapped_column(Integer, default=0)
+
+    files_analysed: Mapped[int] = mapped_column(Integer, default=0)
+    events_parsed: Mapped[int] = mapped_column(Integer, default=0)
+    lines_read: Mapped[int] = mapped_column(Integer, default=0)
+    rules_evaluated: Mapped[int] = mapped_column(Integer, default=0)
+    observation_count: Mapped[int] = mapped_column(Integer, default=0)
+    risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+    verdict: Mapped[str] = mapped_column(String(40), default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    coverage: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    tenant: Mapped[Tenant] = relationship(back_populates="hunts")
+    observations: Mapped[list["Observation"]] = relationship(
+        back_populates="hunt", cascade="all, delete-orphan"
+    )
+
+
+class Observation(Base):
+    """A single finding produced by the detection engine."""
+
+    __tablename__ = "observations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    hunt_id: Mapped[str] = mapped_column(ForeignKey("hunts.id", ondelete="CASCADE"), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True)
+
+    rule_id: Mapped[str] = mapped_column(String(120), index=True)
+    title: Mapped[str] = mapped_column(String(240))
+    description: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(String(16), index=True)  # critical, high, medium, low, info
+    confidence: Mapped[str] = mapped_column(String(16), default="medium")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    category: Mapped[str] = mapped_column(String(80), default="")
+    detection_type: Mapped[str] = mapped_column(String(40), default="pattern")
+
+    risk: Mapped[str] = mapped_column(Text, default="")
+    impact: Mapped[str] = mapped_column(Text, default="")
+    recommendation: Mapped[str] = mapped_column(Text, default="")
+
+    mitre_tactic: Mapped[str] = mapped_column(String(120), default="")
+    mitre_technique: Mapped[str] = mapped_column(String(120), default="")
+    mitre_technique_id: Mapped[str] = mapped_column(String(32), default="")
+
+    entity: Mapped[str] = mapped_column(String(200), default="")
+    data_source: Mapped[str] = mapped_column(String(120), default="")
+    source_files: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)  # raw log excerpts
+    fields: Mapped[dict] = mapped_column(JSON, default=dict)  # extracted key values
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)  # statistical detail
+    references: Mapped[list] = mapped_column(JSON, default=list)
+
+    event_count: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    hunt: Mapped[Hunt] = relationship(back_populates="observations")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(32), index=True)
+    user_id: Mapped[str] = mapped_column(String(32), default="")
+    action: Mapped[str] = mapped_column(String(80))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
