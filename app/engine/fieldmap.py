@@ -25,10 +25,12 @@ _register(STRONG_ALIASES, "timestamp", """
     logtime ts rt start receipttime createdat created_at date_created
     utctime eventdate occurredat activitydatetime timestamp_utc
     requestreceivedtimestamp stagetimestamp published publishedat eventtimestamp
-    firstseen lastseen detectiontime insertid receivedat ingesttime
+    firstseen lastseen detectiontime receivedat ingesttime
+    edgestarttimestamp firsttimestamp lasttimestamp calendartime unixtime
+    realtime_timestamp date_time_utc client_request_timestamp
 """)
 _register(STRONG_ALIASES, "host.name", """
-    hostname host_name computer computername machinename machine_name
+    hostname host_name computer computername machinename machine_name hostidentifier
     dvchost devicehostname nodename node_name log_host source_host
     agent_name workstation workstationname resourcename servername
     server_name systemname sysname devname
@@ -41,7 +43,8 @@ _register(STRONG_ALIASES, "user.name", """
     targetusername suser duser samaccountname userprincipalname upn
     caller_username callerusername actor_name principalname identityname usrname
     logon_user login user_id_name onbehalfofuser
-    useridentity_username requestor
+    useridentity_username requestor principalemail authenticationinfo_principalemail
+    actor_email invoked_by
 """)
 _register(STRONG_ALIASES, "user.actor", """
     subjectusername subject_user_name subjectaccountname callerusername
@@ -60,6 +63,8 @@ _register(STRONG_ALIASES, "source.ip", """
     remoteip remote_ip callerip caller_ip sourceaddress ip_src srcaddr
     sourcenetworkaddress c_ip cip id_orig_h x_forwarded_for origin_ip
     ipaddress ip_address clientaddress callipaddress attacker_ip
+    callerip requestmetadata_callerip clientip_address remote_address
+    client_ipaddress properties_ipaddress
 """)
 _register(STRONG_ALIASES, "source.port", """
     src_port srcport sport source_port spt id_orig_p sourceport
@@ -102,7 +107,7 @@ _register(STRONG_ALIASES, "process.executable", """
 """)
 _register(STRONG_ALIASES, "process.command_line", """
     commandline command_line cmdline process_command_line
-    processcommandline cmd_line command args arguments
+    processcommandline cmd_line command args arguments columns_cmdline
 """)
 _register(STRONG_ALIASES, "process.pid", """
     pid processid process_id new_process_id newprocessid
@@ -137,6 +142,7 @@ _register(STRONG_ALIASES, "dns.question.type", "qtype query_type dns_type record
 _register(STRONG_ALIASES, "dns.answers", "answers dns_answer rdata resolved_ip")
 _register(STRONG_ALIASES, "url.original", """
     url request_url requesturl full_url uri_full weburl original_url
+    clientrequesturi cs_uri request_uri
 """)
 _register(STRONG_ALIASES, "url.path", "uri uri_path cs_uri_stem url_path request_path uri_stem")
 _register(STRONG_ALIASES, "url.query", "query_string cs_uri_query uri_query url_query")
@@ -151,7 +157,7 @@ _register(STRONG_ALIASES, "http.response.bytes", "sc_bytes response_size resp_si
 _register(STRONG_ALIASES, "http.request.referrer", "referer referrer cs_referer http_referer")
 _register(STRONG_ALIASES, "user_agent.original", """
     user_agent useragent http_user_agent cs_user_agent ua
-    useragentstring client_user_agent
+    useragentstring client_user_agent clientrequestuseragent rawuseragent
 """)
 _register(STRONG_ALIASES, "event.code", """
     eventid event_id eventcode event_code signature_id sigid signatureid
@@ -160,6 +166,7 @@ _register(STRONG_ALIASES, "event.code", """
 _register(STRONG_ALIASES, "event.action", """
     eventname event_name eventtype event_type activity operation
     operationname action_name activityname task taskname requestparameters_action
+    methodname event_simplename operation_name
 """)
 _register(STRONG_ALIASES, "event.outcome", """
     outcome event_outcome resultstatus result_status logon_result
@@ -184,9 +191,9 @@ _register(STRONG_ALIASES, "cloud.provider", "cloud_provider csp")
 _register(STRONG_ALIASES, "rule.name", "signature rule_name rulename alert_signature detection_name")
 _register(STRONG_ALIASES, "tls.ja3", "ja3 ja3_hash ja3s tls_fingerprint")
 _register(STRONG_ALIASES, "logon.type", "logontype logon_type authentication_type auth_type")
-_register(STRONG_ALIASES, "email.sender", "sender from_address mail_from sender_address")
-_register(STRONG_ALIASES, "email.recipient", "recipient to_address rcpt_to recipient_address")
-_register(STRONG_ALIASES, "email.subject", "subject mail_subject")
+_register(STRONG_ALIASES, "email.sender", "sender from_address mail_from sender_address senderaddress from_addr envelope_from")
+_register(STRONG_ALIASES, "email.recipient", "recipient to_address rcpt_to recipient_address recipientaddress to_addr envelope_to")
+_register(STRONG_ALIASES, "email.subject", "subject mail_subject message_subject")
 _register(STRONG_ALIASES, "container.name", "container_name pod_name podname")
 _register(STRONG_ALIASES, "error.message", "error errormessage error_message failurereason failure_reason")
 
@@ -196,7 +203,7 @@ _register(WEAK_ALIASES, "source.ip", "src ip clientaddr addr address peer")
 _register(WEAK_ALIASES, "destination.ip", "dst dest destination target remote")
 _register(WEAK_ALIASES, "user.domain", "domain realm")
 _register(WEAK_ALIASES, "http.response.status_code", "status response")
-_register(WEAK_ALIASES, "message", "message msg description details text detail summary body raw rawmessage note reason")
+_register(WEAK_ALIASES, "message", "message msg description details text detail summary body raw rawmessage note reason log line displaymessage")
 _register(WEAK_ALIASES, "file.path", "path file object objectname target_file")
 _register(WEAK_ALIASES, "event.action", "type command event category_name")
 _register(WEAK_ALIASES, "event.category", "category class classification group")

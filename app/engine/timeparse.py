@@ -26,6 +26,12 @@ _MONTHS = {
 # Day first and month first slash dates are ambiguous. Windows, IIS and most
 # security tooling emit month first, so that ordering wins.
 _STRPTIME_FORMATS = (
+    "%Y/%m/%d %H:%M:%S",
+    "%a %b %d %H:%M:%S %Y",
+    "%a %b %d %H:%M:%S %Y %Z",
+    "%b %d %H:%M:%S %Y",
+    "%d/%b/%Y %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
     "%m/%d/%Y %H:%M:%S",
     "%d/%m/%Y %H:%M:%S",
     "%m/%d/%Y %I:%M:%S %p",
@@ -41,7 +47,11 @@ _STRPTIME_FORMATS = (
 # Candidate timestamps embedded anywhere inside a free form line.
 _EMBEDDED_PATTERNS = (
     re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?"),
+    re.compile(r"\d{4}/\d{2}/\d{2}[ T]\d{2}:\d{2}:\d{2}"),
+    re.compile(r"[A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+\d{4}"),
     re.compile(r"\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2}\s?[+-]\d{4}"),
+    # Cisco appliances put the year between the day and the time.
+    re.compile(r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}"),
     re.compile(r"[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}"),
     re.compile(r"\d{2}/\d{2}/\d{4}[ T]\d{2}:\d{2}:\d{2}"),
 )
@@ -56,6 +66,11 @@ def _tz_from_offset(offset: str | None) -> timezone:
         return timezone.utc
     hours, minutes = int(digits[:2]), int(digits[2:4])
     return timezone(sign * timedelta(hours=hours, minutes=minutes))
+
+
+_CTIME_FRACTION = re.compile(
+    r"^([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\.\d+(\s+\d{4})$"
+)
 
 
 def parse_timestamp(value, reference_year: int | None = None) -> float | None:
@@ -126,6 +141,10 @@ def parse_timestamp(value, reference_year: int | None = None) -> float | None:
                 ).timestamp()
             except ValueError:
                 return None
+
+    fractional_ctime = _CTIME_FRACTION.match(text)
+    if fractional_ctime:
+        text = fractional_ctime.group(1) + fractional_ctime.group(2)
 
     for fmt in _STRPTIME_FORMATS:
         try:

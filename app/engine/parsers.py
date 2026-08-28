@@ -154,6 +154,66 @@ def _clip(line: str) -> str:
     return line if len(line) <= MAX_RAW_LENGTH else line[:MAX_RAW_LENGTH] + " ...[truncated]"
 
 
+
+
+# ---------------------------------------------------------------------------
+# Network appliance message enrichment
+# ---------------------------------------------------------------------------
+
+# Firewalls and load balancers state their endpoints inside the message text
+# rather than in named fields. The direction word is required so that two
+# unrelated addresses in a sentence are never mistaken for a flow.
+_ENDPOINT = r"(?:[\w.-]+:)?(\d{1,3}(?:\.\d{1,3}){3})(?:[:/](\d{1,5}))?"
+_DEVICE_SRC = re.compile(r"\b(?:src|source|from|client)\b[\s:=]+" + _ENDPOINT, re.IGNORECASE)
+_DEVICE_DST = re.compile(r"\b(?:dst|dest|destination|to|server)\b[\s:=]+" + _ENDPOINT, re.IGNORECASE)
+# Cisco style "for outside:1.2.3.4/443 to inside:10.0.0.1/51000".
+_DEVICE_FOR = re.compile(r"\bfor\s+" + _ENDPOINT, re.IGNORECASE)
+# A load balancer puts the client at the very start of the message.
+_LEADING_CLIENT = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\s")
+_DEVICE_CODE = re.compile(r"%(?:ASA|FTD|PIX|FWSM|IOSXE|NGIPS)-\d-(\d{6})")
+
+
+def extract_network_endpoints(event: Event, message: str) -> None:
+    """Recover the flow from an appliance message when no field carries it."""
+    if not message:
+        return
+    text = message[:1000]
+
+    leading = _LEADING_CLIENT.match(text)
+    if leading and not event.get("source.ip"):
+        event.set("source.ip", leading.group(1))
+        event.set("source.port", leading.group(2))
+
+    if not event.get("source.ip"):
+        match = _DEVICE_SRC.search(text) or _DEVICE_FOR.search(text)
+        if match:
+            event.set("source.ip", match.group(1))
+            if match.group(2):
+                event.set("source.port", match.group(2))
+    if not event.get("destination.ip"):
+        match = _DEVICE_DST.search(text)
+        if match:
+            event.set("destination.ip", match.group(1))
+            if match.group(2):
+                event.set("destination.port", match.group(2))
+
+    code = _DEVICE_CODE.search(text)
+    if code:
+        event.setdefault_field("event.code", code.group(1))
+        event.setdefault_field("event.provider", "cisco")
+
+
+def combine_date_and_time(event: Event) -> None:
+    """Some appliances split the timestamp across a date field and a time field."""
+    if event.timestamp is not None:
+        return
+    lowered = {key.lower(): value for key, value in event.extra.items()}
+    date_part = lowered.get("date") or lowered.get("eventdate")
+    time_part = lowered.get("time") or lowered.get("eventtime")
+    if date_part and time_part:
+        event.timestamp = parse_timestamp(f"{date_part} {time_part}")
+
+
 # ---------------------------------------------------------------------------
 # base parser
 # ---------------------------------------------------------------------------
@@ -227,9 +287,14 @@ class JsonParser(BaseParser):
             except json.JSONDecodeError:
                 # The sample is only a prefix of a large document. Quoted keys
                 # are enough evidence that the file really is JSON.
-                if len(re.findall(r'"[^"\n]{1,60}"\s*:', joined)) >= 3:
+                quoted_keys = len(re.findall(r'"[^"\n]{1,60}"\s*:', joined))
+                if quoted_keys >= 3:
                     return 0.85
-            return max(score * 0.6, 0.35)
+                # Only claim a truncated document when there is real evidence of
+                # JSON structure. A bracket at the start of a line is not.
+                if quoted_keys >= 1 and joined.rstrip()[-1:] in "}],":
+                    return 0.5
+            return score * 0.6
         return score * 0.6
 
     def parse(self, lines: Iterable[str], source_file: str) -> Iterator[Event]:
@@ -540,10 +605,12 @@ class SyslogParser(BaseParser):
                     for key, value in re.findall(r'([A-Za-z0-9_\-]+)="([^"]*)"', structured):
                         assign(event, key, value)
                 _parse_unix_message(event, message)
+                extract_network_endpoints(event, message)
             else:
                 event.timestamp = find_timestamp(stripped)
                 event.set("message", stripped[:MAX_MESSAGE_LENGTH])
                 _parse_unix_message(event, stripped[:MAX_MESSAGE_LENGTH])
+                extract_network_endpoints(event, stripped[:MAX_MESSAGE_LENGTH])
             for key, value in re.findall(
                 r'\b([A-Za-z0-9_\-]{2,32})=("[^"]{0,4096}"|\S{1,4096})',
                 event.get_str("message")[:MAX_MESSAGE_LENGTH],
@@ -891,6 +958,7 @@ class KeyValueParser(BaseParser):
             event = self._event(line, line_no, source_file)
             for key, value in _KV_RE.findall(stripped):
                 assign(event, key, value.strip('"').strip("'"))
+            combine_date_and_time(event)
             if not event.timestamp:
                 event.timestamp = find_timestamp(stripped)
             if not event.get("message"):
@@ -1092,6 +1160,264 @@ def _map_windows_semantics(event: Event) -> None:
         event.set("event.category", "process")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Linux audit daemon
+# ---------------------------------------------------------------------------
+
+_AUDIT_PREFIX = re.compile(r"^type=(?P<type>\S+)\s+msg=audit\((?P<epoch>\d+\.\d+):(?P<serial>\d+)\):\s*(?P<body>.*)$")
+_AUDIT_ARG = re.compile(r"\ba(\d+)=(\"[^\"]*\"|\S+)")
+
+
+class AuditdParser(BaseParser):
+    """The Linux audit daemon, which is the primary execution record on Linux."""
+
+    name = "auditd"
+    data_source = "linux_audit"
+
+    @classmethod
+    def sniff(cls, sample: list[str], filename: str) -> float:
+        useful = [line for line in sample if line.strip()]
+        if not useful:
+            return 0.0
+        hits = sum(1 for line in useful if _AUDIT_PREFIX.match(line.strip()))
+        return min(0.97, hits / len(useful) + 0.05) if hits else 0.0
+
+    def parse(self, lines: Iterable[str], source_file: str) -> Iterator[Event]:
+        for line_no, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            event = self._event(line, line_no, source_file)
+            match = _AUDIT_PREFIX.match(stripped)
+            body = stripped
+            if match:
+                event.timestamp = float(match.group("epoch"))
+                event.set("event.action", match.group("type").lower())
+                event.set("event.provider", "auditd")
+                event.set("event.id", match.group("serial"))
+                body = match.group("body")
+            for key, value in _KV_RE.findall(body):
+                assign(event, key, value.strip('"'))
+            # EXECVE records carry the command as numbered argument fields.
+            args = sorted(
+                ((int(index), value.strip('"')) for index, value in _AUDIT_ARG.findall(body)),
+                key=lambda item: item[0],
+            )
+            if args:
+                command = " ".join(value for _, value in args)
+                event.set("process.command_line", _decode_audit(command))
+            for source, target in (("exe", "process.executable"), ("comm", "process.name"),
+                                   ("key", "rule.name"), ("auid", "user.id")):
+                value = event.extra.get(source)
+                if value:
+                    event.set(target, _decode_audit(str(value).strip('"')))
+            if not event.get("message"):
+                event.set("message", body[:600])
+            yield enrich(event)
+
+
+def _decode_audit(value: str) -> str:
+    """auditd hex encodes any value containing a space or a quote."""
+    if len(value) >= 4 and len(value) % 2 == 0 and re.fullmatch(r"[0-9A-Fa-f]+", value):
+        try:
+            decoded = bytes.fromhex(value).decode("utf-8", "replace")
+            if decoded.isprintable():
+                return decoded
+        except ValueError:
+            return value
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Squid native access log
+# ---------------------------------------------------------------------------
+
+_SQUID_RE = re.compile(
+    r"^(?P<ts>\d{9,10}\.\d{1,3})\s+(?P<elapsed>\d+)\s+(?P<client>\S+)\s+"
+    r"(?P<result>[A-Z_]+)/(?P<status>\d{3})\s+(?P<bytes>\d+)\s+(?P<method>[A-Z]+)\s+"
+    r"(?P<url>\S+)\s+(?P<user>\S+)\s+(?P<hierarchy>\S+)\s*(?P<type>\S*)"
+)
+
+
+class SquidParser(BaseParser):
+    name = "squid"
+    data_source = "web"
+
+    @classmethod
+    def sniff(cls, sample: list[str], filename: str) -> float:
+        useful = [line for line in sample if line.strip()]
+        if not useful:
+            return 0.0
+        hits = sum(1 for line in useful if _SQUID_RE.match(line.strip()))
+        return min(0.96, hits / len(useful)) if hits else 0.0
+
+    def parse(self, lines: Iterable[str], source_file: str) -> Iterator[Event]:
+        for line_no, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            event = self._event(line, line_no, source_file)
+            match = _SQUID_RE.match(stripped)
+            if match:
+                groups = match.groupdict()
+                event.timestamp = float(groups["ts"])
+                event.set("source.ip", groups["client"])
+                event.set("http.response.status_code", groups["status"])
+                event.set("http.response.bytes", int(groups["bytes"]))
+                event.set("http.request.method", groups["method"])
+                event.set("url.original", groups["url"])
+                if groups["user"] not in ("-", ""):
+                    event.set("user.name", groups["user"])
+                event.set("event.action", groups["result"])
+                event.set("event.category", "web")
+            else:
+                event.timestamp = find_timestamp(stripped)
+                event.set("message", stripped[:600])
+            yield enrich(event)
+
+
+# ---------------------------------------------------------------------------
+# AWS VPC flow logs, which are positional and carry no header
+# ---------------------------------------------------------------------------
+
+_VPC_FIELDS_V2 = (
+    "version", "account_id", "interface_id", "srcaddr", "dstaddr", "srcport", "dstport",
+    "protocol", "packets", "bytes", "start", "end", "action", "log_status",
+)
+_VPC_RE = re.compile(
+    r"^\d{1,3}\s+\d{12}\s+eni-[0-9a-f]+\s+\S+\s+\S+\s+\d{1,5}\s+\d{1,5}\s+\d{1,3}\s+"
+    r"\d+\s+\d+\s+\d{9,10}\s+\d{9,10}\s+(?:ACCEPT|REJECT|-)\s+(?:OK|NODATA|SKIPDATA)"
+)
+_PROTOCOL_NAMES = {"1": "icmp", "6": "tcp", "17": "udp", "47": "gre", "50": "esp"}
+
+
+class VpcFlowParser(BaseParser):
+    """Amazon VPC flow logs in the default version 2 field order."""
+
+    name = "vpc_flow"
+    data_source = "network_flow"
+
+    @classmethod
+    def sniff(cls, sample: list[str], filename: str) -> float:
+        useful = [line for line in sample if line.strip() and not line.startswith("version")]
+        if not useful:
+            return 0.0
+        hits = sum(1 for line in useful if _VPC_RE.match(line.strip()))
+        return min(0.97, hits / len(useful)) if hits else 0.0
+
+    def parse(self, lines: Iterable[str], source_file: str) -> Iterator[Event]:
+        header: tuple[str, ...] = _VPC_FIELDS_V2
+        for line_no, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            values = stripped.split()
+            if values and values[0] == "version":
+                header = tuple(values)
+                continue
+            event = self._event(line, line_no, source_file)
+            record = dict(zip(header, values))
+            for key, value in record.items():
+                if value not in ("-", ""):
+                    assign(event, key, value)
+            event.set("source.ip", record.get("srcaddr"))
+            event.set("destination.ip", record.get("dstaddr"))
+            event.set("source.port", record.get("srcport"))
+            event.set("destination.port", record.get("dstport"))
+            event.set("network.bytes", record.get("bytes"))
+            event.set("cloud.provider", "aws")
+            event.set("cloud.account.id", record.get("account_id"))
+            protocol = record.get("protocol")
+            if protocol:
+                event.set("network.protocol", _PROTOCOL_NAMES.get(protocol, protocol))
+            action = record.get("action")
+            if action:
+                event.set("event.action", action.lower())
+                event.set("event.outcome", "success" if action == "ACCEPT" else "failure")
+            start = record.get("start")
+            if start and start.isdigit():
+                event.timestamp = float(start)
+            yield enrich(event)
+
+
+# ---------------------------------------------------------------------------
+# Palo Alto Networks comma separated logs, which carry no header row
+# ---------------------------------------------------------------------------
+
+_PANOS_RE = re.compile(
+    r"^\d*,\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2},\S*,"
+    r"(TRAFFIC|THREAT|SYSTEM|CONFIG|HIP-MATCH|URL|WILDFIRE|GLOBALPROTECT|USERID|DECRYPTION|AUTHENTICATION)\b",
+    re.IGNORECASE,
+)
+# The positions shared by the traffic and threat log types in current PAN-OS.
+_PANOS_COMMON = {
+    1: "receive_time", 3: "log_type", 4: "subtype", 6: "generated_time",
+    7: "source.ip", 8: "destination.ip", 11: "rule.name", 12: "user.name",
+    13: "destination.user", 14: "network.protocol_application", 16: "source.zone",
+    17: "destination.zone", 24: "source.port", 25: "destination.port",
+    29: "network.protocol", 30: "event.action", 31: "network.bytes",
+}
+
+
+class PaloAltoParser(BaseParser):
+    """PAN-OS logs are positional comma separated records with no header."""
+
+    name = "panos_csv"
+    data_source = "security_appliance"
+
+    @classmethod
+    def sniff(cls, sample: list[str], filename: str) -> float:
+        useful = [line for line in sample if line.strip()]
+        if not useful:
+            return 0.0
+        hits = sum(1 for line in useful if _PANOS_RE.match(line.strip()))
+        return min(0.97, hits / len(useful)) if hits else 0.0
+
+    def parse(self, lines: Iterable[str], source_file: str) -> Iterator[Event]:
+        for line_no, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            event = self._event(line, line_no, source_file)
+            try:
+                values = next(csv.reader(io.StringIO(stripped)), [])
+            except csv.Error:
+                values = stripped.split(",")
+            for index, field_name in _PANOS_COMMON.items():
+                if index >= len(values):
+                    continue
+                value = values[index].strip()
+                if not value or value in ("0.0.0.0", "-"):
+                    continue
+                if field_name in ("receive_time", "generated_time"):
+                    event.extra[field_name] = value
+                    continue
+                if field_name in ("log_type", "subtype"):
+                    event.extra[field_name] = value
+                    continue
+                event.set(field_name, value)
+            event.timestamp = parse_timestamp(
+                event.extra.get("generated_time") or event.extra.get("receive_time")
+            )
+            log_type = str(event.extra.get("log_type", "")).upper()
+            event.set("event.provider", "PAN-OS")
+            event.set("event.dataset", log_type.lower())
+            if log_type == "THREAT":
+                event.set("event.category", "intrusion_detection")
+                event.data_source = "ids"
+            elif log_type == "TRAFFIC":
+                event.set("event.category", "network")
+                event.data_source = "network_flow"
+            elif log_type == "URL":
+                event.data_source = "web"
+            action = event.get_str("event.action")
+            if action:
+                event.set("event.outcome", "success" if action in ("allow", "allowed") else "failure")
+            yield enrich(event)
+
+
 # ---------------------------------------------------------------------------
 # Free text fallback
 # ---------------------------------------------------------------------------
@@ -1119,6 +1445,7 @@ class TextParser(BaseParser):
             ):
                 assign(event, key, value.strip('"'))
             _parse_unix_message(event, bounded)
+            extract_network_endpoints(event, bounded)
             yield enrich(event)
 
 
@@ -1130,6 +1457,10 @@ PARSERS: tuple[type[BaseParser], ...] = (
     ZeekParser,
     W3CExtendedParser,
     AccessLogParser,
+    AuditdParser,
+    SquidParser,
+    VpcFlowParser,
+    PaloAltoParser,
     SyslogParser,
     DelimitedParser,
     KeyValueParser,

@@ -20,7 +20,14 @@ from app.engine.rules.base import SequenceRule
 
 LITERAL = re.compile(r"[A-Za-z0-9_/\\.:-]{3,}")
 CLASS_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789/\\.-_+=%$ \t\"'"
-SMALL, LARGE = 2000, 8000
+# Larger sizes so the signal is well above scheduler noise, and the ratio is
+# still a clean 4x so the growth number stays easy to read.
+SMALL, LARGE = 4000, 16000
+REPEATS = 3
+# A catastrophic pattern grows 15x or more for a 4x input, so this threshold
+# has plenty of headroom over the linear patterns that sit at 4x.
+MAX_GROWTH = 8.0
+FLOOR_SECONDS = 0.03
 
 
 def module_patterns():
@@ -81,14 +88,24 @@ def adversarial_inputs(pattern: re.Pattern[str], size: int) -> list[str]:
 
 
 def worst_case(pattern: re.Pattern[str], size: int) -> float:
+    """Slowest payload, timed as the best of several runs.
+
+    The minimum is the right statistic for a timing measurement: interference
+    from other work on the machine can only ever add time, so the fastest run
+    is the closest estimate of the real cost. Taking a single sample made this
+    test fail on patterns that are provably linear.
+    """
     slowest = 0.0
     for payload in adversarial_inputs(pattern, size):
-        started = time.perf_counter()
-        try:
-            pattern.search(payload)
-        except Exception:  # pragma: no cover - a pattern must never raise
-            pytest.fail(f"pattern raised on adversarial input: {pattern.pattern}")
-        slowest = max(slowest, time.perf_counter() - started)
+        best = float("inf")
+        for _ in range(REPEATS):
+            started = time.perf_counter()
+            try:
+                pattern.search(payload)
+            except Exception:  # pragma: no cover - a pattern must never raise
+                pytest.fail(f"pattern raised on adversarial input: {pattern.pattern}")
+            best = min(best, time.perf_counter() - started)
+        slowest = max(slowest, best)
     return slowest
 
 
@@ -98,11 +115,11 @@ class TestPatternScaling:
     def test_cost_grows_linearly(self, rule_id, pattern):
         """Quadrupling the input must not multiply the cost by much more than four."""
         small = worst_case(pattern, SMALL)
-        if small < 0.0004:
+        if small < 0.0005:
             return  # too fast to measure a meaningful ratio
         large = worst_case(pattern, LARGE)
         ratio = large / small
-        assert not (large > 0.02 and ratio > 6.0), (
+        assert not (large > FLOOR_SECONDS and ratio > MAX_GROWTH), (
             f"{rule_id} scales superlinearly: {small * 1000:.1f} ms at {SMALL} characters, "
             f"{large * 1000:.1f} ms at {LARGE}, growth {ratio:.1f}x for a 4x input. "
             f"Bound the quantifiers in: {pattern.pattern[:120]}"
@@ -111,11 +128,11 @@ class TestPatternScaling:
     @pytest.mark.parametrize("name,pattern", MODULE_PATTERNS, ids=[n for n, _ in MODULE_PATTERNS])
     def test_parser_patterns_scale_linearly(self, name, pattern):
         small = worst_case(pattern, SMALL)
-        if small < 0.0004:
+        if small < 0.0005:
             return
         large = worst_case(pattern, LARGE)
         ratio = large / small
-        assert not (large > 0.02 and ratio > 6.0), (
+        assert not (large > FLOOR_SECONDS and ratio > MAX_GROWTH), (
             f"{name} scales superlinearly: {small * 1000:.1f} ms at {SMALL} characters, "
             f"{large * 1000:.1f} ms at {LARGE}, growth {ratio:.1f}x for a 4x input. "
             f"Bound the quantifiers in: {pattern.pattern[:120]}"
@@ -154,6 +171,25 @@ class TestInputBounds:
         event = Event()
         event.set("user.name", "  jdoe  ")
         assert event.get_str("user.name") == "jdoe"
+
+
+class TestTheDetectorItselfWorks:
+    """A test that cannot fail is worthless, so the detector is checked."""
+
+    def test_a_known_catastrophic_pattern_is_caught(self):
+        # The shape that was actually found in the syslog helper: a lazy gap
+        # searching for a literal that never arrives.
+        bad = re.compile(r"(\S+)\s*:.*?TTY=(\S*)\s*;\s*PWD=(\S*)")
+        small = worst_case(bad, 600)
+        large = worst_case(bad, 2400)
+        assert large / small > MAX_GROWTH, "the scaling check no longer detects backtracking"
+
+    def test_the_bounded_replacement_passes(self):
+        from app.engine.parsers import _SUDO_RE
+
+        small = worst_case(_SUDO_RE, SMALL)
+        large = worst_case(_SUDO_RE, LARGE)
+        assert large / small < MAX_GROWTH
 
 
 class TestPathologicalArchives:

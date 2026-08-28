@@ -67,14 +67,23 @@ timestamps and indicators. Supported formats:
 | Family     | Formats |
 |------------|---------|
 | Structured | JSON, NDJSON, JSON Lines, pretty printed JSON documents, CSV, TSV, semicolon and pipe delimited, key value (logfmt) |
-| Windows    | Binary `.evtx`, exported event XML, Sysmon operational, PowerShell script block, Windows JSON exports |
-| Unix       | Syslog RFC 3164 and RFC 5424, ISO prefixed syslog, `auth.log`, `secure`, sudo, PAM, useradd |
-| Web        | Apache and Nginx common and combined log format, W3C extended (IIS) |
-| Network    | Zeek TSV (`conn.log`, `dns.log`, `http.log`), flow exports, Suricata EVE JSON |
-| Appliance  | CEF (ArcSight), LEEF (QRadar) |
-| Cloud      | AWS CloudTrail (`Records` wrapper or one event per line), Microsoft 365 unified audit, Entra ID sign ins |
-| Platform   | Kubernetes API server audit, identity provider system logs, source control and pipeline audit |
+| Windows    | Binary `.evtx`, exported event XML, Sysmon operational, PowerShell script block, Windows JSON exports, Windows Firewall |
+| Unix       | Syslog RFC 3164 and RFC 5424, ISO prefixed syslog, `auth.log`, `secure`, sudo, PAM, useradd, the audit daemon (`auditd`, including its hex encoded fields), journald JSON |
+| Web        | Apache and Nginx common and combined log format, Apache and Nginx error logs, W3C extended (IIS), Squid native, HAProxy, Cloudflare |
+| Network    | Zeek TSV and Zeek JSON, Suricata EVE JSON, AWS VPC flow logs, Cisco ASA, Fortinet, Palo Alto PAN-OS comma separated logs |
+| Appliance  | CEF (ArcSight), LEEF (QRadar), and any appliance that states its flow in the message text |
+| Cloud      | AWS CloudTrail (`Records` wrapper or one event per line), Microsoft 365 unified audit, Entra ID sign ins, Azure diagnostic logs, Google Cloud audit logs |
+| Platform   | Kubernetes API server audit and events, container runtime (Docker JSON and CRI), identity provider system logs, source control and pipeline audit, osquery, endpoint agent exports |
+| Mail       | Postfix, Exchange message tracking, Microsoft 365 message trace |
+| Database   | SQL Server error log, PostgreSQL and MySQL logs |
 | Fallback   | Any free text, with timestamp recovery, key value extraction and indicator extraction |
+
+The claim that the engine reads any log is only worth as much as its evidence, so it is measured
+rather than asserted. `tests/fixtures/log_formats.py` holds samples of 27 formats in the shape the
+platform actually emits, and `tests/test_format_coverage.py` requires every one of them to be
+identified, timestamped and have its key fields mapped to the common schema. When that corpus was
+first run, 15 of the 27 had a gap. A format that silently regresses to the free text fallback fails
+the suite rather than quietly producing a weaker hunt.
 
 Every record is normalised into an Elastic Common Schema style document through a field alias table
 covering several hundred vendor field names, plus content based classification so that a plain CSV of

@@ -115,7 +115,7 @@ RULES = [
                 r"/(?:c99|r57|b374k|wso|shell|cmd|backdoor|hacked|up|adminer)\.(?:php|asp|aspx|jsp)",
                 r"\.(?:php|asp|aspx|jsp|jspx|cfm)\?(?:cmd|exec|command|shell|run|c)=",
                 r"/(?:uploads?|images?|tmp|temp|files?|assets)/[\w.-]*\.(?:php|asp|aspx|jsp|jspx)",
-                r"/wp-content/uploads/[^\s]*\.php",
+                r"/wp-content/uploads/[^\s]{0,300}\.php",
                 r"\.(?:php|aspx?|jsp)\?(?:pass|password|key|token)=",
             ]),
             C("_text", "any_contains", ["eval(base64_decode", "assert($_", "system($_", "shell_exec($_",
