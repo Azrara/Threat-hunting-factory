@@ -54,7 +54,7 @@ RULES = [
                 r"-e\s+[A-Za-z0-9+/=]{60,}",
                 r"-(?:ex|exec|executionpolicy)\s+bypass",
                 r"-w(?:indowstyle)?\s+hidden",
-                r"-nop(?:rofile)?\b.*-c",
+                r"-nop(?:rofile)?\b[^\n]{0,300}-c",
                 r"frombase64string",
                 r"iex\s*\(",
                 r"invoke-expression",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -10,7 +10,8 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import AuditLog, Tenant, User, utcnow
 from ..schemas import LoginRequest, TenantRegistration, TokenResponse
-from ..security import create_access_token, hash_password, verify_password
+from ..security import create_access_token, hash_password, verify_password, waste_password_cycle
+from ..throttle import account_limiter, address_limiter, client_address
 from ..serializers import tenant_payload, user_payload
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -45,17 +46,42 @@ def register_tenant(payload: TenantRegistration, db: Session = Depends(get_db)) 
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+    account_key = f"{payload.tenant_slug}:{payload.email}"
+    address_key = client_address(request)
+    for limiter, key in ((account_limiter, account_key), (address_limiter, address_key)):
+        allowed, retry_after = limiter.check(key)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed sign in attempts, please wait before trying again",
+                headers={"Retry-After": str(retry_after)},
+            )
+
     tenant = db.scalar(select(Tenant).where(Tenant.slug == payload.tenant_slug))
     invalid = HTTPException(status_code=401, detail="Invalid workspace, email address or password")
-    if tenant is None or not tenant.is_active:
+
+    def reject() -> None:
+        account_limiter.record(account_key)
+        address_limiter.record(address_key)
         raise invalid
+
+    if tenant is None or not tenant.is_active:
+        # Spend the same work as a real verification so that an unknown
+        # workspace cannot be told apart from a wrong password by timing.
+        waste_password_cycle()
+        reject()
     user = db.scalar(
         select(User).where(User.tenant_id == tenant.id, func.lower(User.email) == payload.email)
     )
-    if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
-        raise invalid
+    if user is None or not user.is_active:
+        waste_password_cycle()
+        reject()
+    if not verify_password(payload.password, user.password_hash):
+        reject()
 
+    account_limiter.reset(account_key)
+    address_limiter.reset(address_key)
     user.last_login_at = utcnow()
     db.add(AuditLog(tenant_id=tenant.id, user_id=user.id, action="user.login", detail=user.email))
     db.commit()

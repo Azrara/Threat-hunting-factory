@@ -17,6 +17,16 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8")[:72], bcrypt.gensalt()).decode("utf-8")
 
 
+# Verifying against this costs the same as verifying a real hash, which keeps
+# the response time for an unknown account indistinguishable from a known one.
+_DUMMY_HASH = bcrypt.hashpw(b"decoy-value-for-constant-time-comparison", bcrypt.gensalt()).decode("utf-8")
+
+
+def waste_password_cycle() -> None:
+    """Spend the same work as a real check, so absent accounts do not stand out."""
+    bcrypt.checkpw(b"decoy-value-for-constant-time-comparison", _DUMMY_HASH.encode("utf-8"))
+
+
 def verify_password(password: str, password_hash: str) -> bool:
     try:
         return bcrypt.checkpw(password.encode("utf-8")[:72], password_hash.encode("utf-8"))

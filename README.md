@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-710%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1300%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -171,7 +171,7 @@ app/
     catalog.py         Hypotheses and data source definitions
     rules/             The detection library, one module per surface
 web/                   Vanilla JavaScript interface, no build step
-tests/                 710 tests
+tests/                 1300 tests
 tools/                 Sample evidence generator
 ```
 
@@ -233,6 +233,33 @@ GET    /api/hunts/{id}/report.pdf      the styled PDF report
 GET    /api/hunts/{id}/report.json     the machine readable report
 GET    /api/stats/overview             workspace statistics for the dashboard
 ```
+
+## Security posture
+
+The platform ingests archives from outside and renders their content in a browser and a PDF, so the
+untrusted paths were tested rather than assumed. What was found and fixed:
+
+| Finding | Effect | Fix |
+|---------|--------|-----|
+| Catastrophic backtracking in the syslog helper | One long line hung the analysis indefinitely, measured at 31 seconds for a single 50,000 character line | Quantifiers bounded; every pattern in the rule library and the parsing layer is now measured for linear scaling by `tests/test_redos.py` |
+| Quadratic patterns in four detection rules | A crafted record cost 2 seconds per rule | Bounded to the lengths the formats actually allow |
+| Extraction trusted the archive's declared sizes | The size budget could be bypassed by a lying header | The budget counts bytes actually written |
+| A damaged archive member aborted the whole hunt | One corrupt file destroyed the analysis of every other file | Members are skipped individually and reported; the format probes are guarded because they read the file and can raise |
+| Login timing revealed valid accounts | 275 ms for a real account against 3 ms for an unknown one | The same password verification work runs either way, measured at a 1.01x spread |
+| No limit on password guessing | Unlimited attempts against the platform's own sign in | Sliding window limits per account and per source address |
+| Long or hostile upload filenames | A 300 character name returned a server error | Names are reduced to a safe bounded basename |
+| A rejected sign in was treated as an expired session | The real error was replaced and the form was cleared | Only a request that carried a token can expire a session |
+
+Verified as safe: cross tenant reads return 404 rather than disclosing existence; archive members
+cannot escape the extraction directory; the static route cannot serve files outside the web
+directory; log content reaches the browser as text rather than markup, checked by rendering live
+payloads in a real browser and confirming nothing executes; the same payloads render as literal text
+in the PDF.
+
+Known limits, stated rather than hidden. The login limiter keeps its state in the process, so a
+deployment running several workers needs a shared store to be effective. The platform has no built in
+transport security and expects to sit behind a terminating proxy. Uploaded evidence is stored
+unencrypted on disk under the data directory.
 
 ## Limitations
 

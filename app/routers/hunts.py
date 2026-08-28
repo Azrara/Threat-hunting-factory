@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,26 @@ ALLOWED_SUFFIXES = {
 CHUNK = 1024 * 1024
 
 
+MAX_FILENAME_LENGTH = 120
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_filename(raw: str | None) -> str:
+    """Reduce an uploaded name to something safe to place on disk.
+
+    The name is attacker controlled: it can carry directories, control
+    characters or be long enough that the filesystem rejects it.
+    """
+    candidate = Path(raw or "evidence.zip").name
+    candidate = _UNSAFE_NAME.sub("_", candidate).strip("._") or "evidence.zip"
+    if len(candidate) > MAX_FILENAME_LENGTH:
+        stem, _, extension = candidate.rpartition(".")
+        extension = extension[:12]
+        keep = MAX_FILENAME_LENGTH - len(extension) - 1
+        candidate = f"{(stem or candidate)[:keep]}.{extension}" if extension else candidate[:MAX_FILENAME_LENGTH]
+    return candidate
+
+
 def _fetch(db: Session, user: User, hunt_id: str) -> Hunt:
     hunt = db.get(Hunt, hunt_id)
     if hunt is None or hunt.tenant_id != user.tenant_id:
@@ -46,7 +67,7 @@ async def create_hunt(
     if hypothesis is None:
         raise HTTPException(status_code=400, detail="Unknown hypothesis")
 
-    filename = Path(file.filename or "evidence.zip").name
+    filename = _safe_filename(file.filename)
     suffix = Path(filename).suffix.lower()
     compound = "".join(Path(filename).suffixes[-2:]).lower()
     if suffix not in ALLOWED_SUFFIXES and compound not in (".tar.gz", ".tar.bz2", ".tar.xz"):

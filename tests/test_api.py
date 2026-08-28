@@ -90,6 +90,20 @@ class TestAuthentication:
             "tenant_slug": workspace["slug"], "email": workspace["email"], "password": "WrongPassword1",
         })
         assert response.status_code == 401
+        # The interface shows this text, and it must not leak which part was wrong.
+        detail = response.json()["detail"]
+        assert detail == "Invalid workspace, email address or password"
+
+    def test_the_rejection_is_identical_for_every_wrong_input(self, workspace):
+        """A different message for each case would enumerate accounts."""
+        client, slug = workspace["client"], workspace["slug"]
+        cases = [
+            {"tenant_slug": slug, "email": workspace["email"], "password": "WrongPassword1"},
+            {"tenant_slug": slug, "email": "nobody@nowhere.test", "password": "WrongPassword1"},
+            {"tenant_slug": "no-such-workspace", "email": workspace["email"], "password": "WrongPassword1"},
+        ]
+        details = {client.post("/api/auth/login", json=case).json()["detail"] for case in cases}
+        assert len(details) == 1
 
     def test_unknown_workspace_is_rejected(self, workspace):
         response = workspace["client"].post("/api/auth/login", json={
@@ -419,3 +433,59 @@ class TestStaticHosting:
         response = client.get("/../app/config.py")
         assert response.status_code in (200, 404)
         assert "THF_JWT_SECRET" not in response.text
+
+
+class TestUntrustedContent:
+    """Log content is attacker influenced and reaches the browser and the PDF."""
+
+    @pytest.fixture(scope="class")
+    def hostile(self, tmp_path_factory):
+        import json
+        import zipfile
+
+        payloads = [
+            '<script>window.pwned=1</script>',
+            '<img src=x onerror=alert(1)>',
+            '"><svg/onload=alert(1)>',
+            '<onDraw name="x"/><font color="red">inject</font>',
+            "'; DROP TABLE hunts; --",
+        ]
+        records = []
+        for index, payload in enumerate(payloads):
+            records.append(json.dumps({
+                "@timestamp": f"2026-03-11T09:0{index}:00Z", "Channel": "Security", "EventID": 4688,
+                "Computer": f"WS-{payload}", "TargetUserName": payload,
+                "CommandLine": f"vssadmin.exe delete shadows /all {payload}",
+            }))
+        target = tmp_path_factory.mktemp("hostile") / "hostile.zip"
+        with zipfile.ZipFile(target, "w") as archive:
+            archive.writestr("windows/security.json", "\n".join(records))
+        return target
+
+    def test_the_pipeline_carries_payloads_without_executing_them(self, workspace, hostile):
+        client, headers = workspace["client"], workspace["headers"]
+        with open(hostile, "rb") as handle:
+            response = client.post("/api/hunts", headers=headers,
+                                   data={"hypothesis_id": "math-full-spectrum"},
+                                   files={"file": ("hostile.zip", handle, "application/zip")})
+        assert response.status_code == 201
+        hunt = wait_for_completion(client, headers, response.json()["id"])
+        assert hunt["status"] == "completed"
+
+        observations = client.get(f"/api/hunts/{hunt['id']}/observations",
+                                  headers=headers).json()["items"]
+        assert observations, "the planted behaviour should still be detected"
+        # The payload has to survive as data, so the analyst sees what was logged.
+        assert any("<script>" in item["entity"] or "<script>" in str(item["evidence"])
+                   for item in observations)
+
+        # The report renders it without failing, which is where escaping happens.
+        pdf = client.get(f"/api/hunts/{hunt['id']}/report.pdf", headers=headers)
+        assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF-")
+
+        exported = client.get(f"/api/hunts/{hunt['id']}/report.json", headers=headers)
+        assert exported.status_code == 200
+        assert exported.json()["observations"]
+
+    def test_the_database_is_intact_afterwards(self, workspace):
+        assert workspace["client"].get("/api/hunts", headers=workspace["headers"]).status_code == 200

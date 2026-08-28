@@ -56,8 +56,13 @@ async function request(path, options = {}) {
     headers.set("Content-Type", "application/json");
     options.body = JSON.stringify(options.json);
   }
+  const hadToken = Boolean(auth.token);
   const response = await fetch(path, { ...options, headers });
   if (response.status === 401) {
+    // A rejected sign in is not an expired session. Only a request that
+    // carried a token means the session went stale, and only then should the
+    // application sign the user out and re render.
+    if (!hadToken) throw await parseError(response);
     auth.clear();
     window.dispatchEvent(new CustomEvent("thf:unauthorised"));
     throw new ApiError("Your session has expired, please sign in again", 401);

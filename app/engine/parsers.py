@@ -15,7 +15,7 @@ import re
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from .event import Event
+from .event import MAX_FIELD_LENGTH, Event
 from .fieldmap import canonical_key, flatten
 from .timeparse import find_timestamp, parse_timestamp
 
@@ -23,6 +23,10 @@ from .timeparse import find_timestamp, parse_timestamp
 # bounds the worst case for files with pathologically long lines. Evidence
 # excerpts are truncated to 900 characters when reported anyway.
 MAX_RAW_LENGTH = 2000
+# The free text helpers below run several regular expressions over a message.
+# No real syslog message is longer than this, and bounding the input keeps a
+# pathological line from making every one of them expensive.
+MAX_MESSAGE_LENGTH = 4000
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +42,8 @@ def assign(event: Event, key: str, value: Any) -> None:
         value = value.strip()
         if not value or value in ("-", "--", "N/A", "null", "None"):
             return
+        if len(value) > MAX_FIELD_LENGTH:
+            value = value[:MAX_FIELD_LENGTH]
     canonical, strong = canonical_key(key)
     event.extra[key] = value
     if canonical:
@@ -523,7 +529,7 @@ class SyslogParser(BaseParser):
                 event.set("event.provider", groups.get("app"))
                 if groups.get("pid"):
                     event.set("process.pid", groups.get("pid"))
-                message = groups.get("msg") or ""
+                message = (groups.get("msg") or "")[:MAX_MESSAGE_LENGTH]
                 event.set("message", message)
                 if groups.get("pri"):
                     priority = int(groups["pri"])
@@ -536,9 +542,12 @@ class SyslogParser(BaseParser):
                 _parse_unix_message(event, message)
             else:
                 event.timestamp = find_timestamp(stripped)
-                event.set("message", stripped)
-                _parse_unix_message(event, stripped)
-            for key, value in re.findall(r'\b([A-Za-z0-9_\-]{2,32})=("[^"]*"|\S+)', event.get_str("message")):
+                event.set("message", stripped[:MAX_MESSAGE_LENGTH])
+                _parse_unix_message(event, stripped[:MAX_MESSAGE_LENGTH])
+            for key, value in re.findall(
+                r'\b([A-Za-z0-9_\-]{2,32})=("[^"]{0,4096}"|\S{1,4096})',
+                event.get_str("message")[:MAX_MESSAGE_LENGTH],
+            ):
                 assign(event, key, value.strip('"'))
             yield enrich(event)
 
@@ -547,7 +556,10 @@ _SSH_ACCEPT_RE = re.compile(
     r"(Accepted|Failed)\s+(\w+)\s+for\s+(?:invalid user\s+)?(\S+)\s+from\s+(\S+)\s+port\s+(\d+)", re.IGNORECASE
 )
 _SSH_INVALID_RE = re.compile(r"Invalid user\s+(\S+)\s+from\s+(\S+)", re.IGNORECASE)
-_SUDO_RE = re.compile(r"(\S+)\s*:.*?TTY=(\S*)\s*;\s*PWD=(\S*)\s*;\s*USER=(\S*)\s*;\s*COMMAND=(.+)$")
+_SUDO_RE = re.compile(
+    r"(\S{1,64})\s*:[^\n]{0,120}?TTY=(\S{0,64})\s*;\s*PWD=(\S{0,256})\s*;\s*"
+    r"USER=(\S{0,64})\s*;\s*COMMAND=(.{0,2000})"
+)
 _USERADD_RE = re.compile(r"new user: name=([^,]+), UID=(\d+), GID=(\d+)", re.IGNORECASE)
 _PAM_RE = re.compile(r"authentication failure;.*?ruser=(\S*)\s+rhost=(\S*)\s*(?:user=(\S*))?", re.IGNORECASE)
 
@@ -893,7 +905,7 @@ class KeyValueParser(BaseParser):
 _XML_EVENT_RE = re.compile(r"<Event[\s>].*?</Event>", re.DOTALL | re.IGNORECASE)
 _XML_DATA_RE = re.compile(r'<Data\s+Name=[\'"]([^\'"]+)[\'"]\s*>(.*?)</Data>', re.DOTALL | re.IGNORECASE)
 _XML_TAG_RE = re.compile(r"<(\w+)(\s[^>]*)?>([^<]*)</\1>", re.DOTALL)
-_XML_ATTR_RE = re.compile(r'(\w+)=[\'"]([^\'"]*)[\'"]')
+_XML_ATTR_RE = re.compile(r'(\w{1,64})=[\'"]([^\'"]{0,4096})[\'"]')
 
 
 class WindowsXmlParser(BaseParser):
@@ -1099,11 +1111,14 @@ class TextParser(BaseParser):
             if not stripped:
                 continue
             event = self._event(line, line_no, source_file)
+            bounded = stripped[:MAX_MESSAGE_LENGTH]
             event.timestamp = find_timestamp(stripped)
-            event.set("message", stripped[:1500])
-            for key, value in re.findall(r'\b([A-Za-z][A-Za-z0-9_\-]{2,32})\s*[:=]\s*("[^"]*"|\S+)', stripped):
+            event.set("message", bounded[:1500])
+            for key, value in re.findall(
+                r'\b([A-Za-z][A-Za-z0-9_\-]{2,32})\s*[:=]\s*("[^"]{0,4096}"|\S{1,4096})', bounded
+            ):
                 assign(event, key, value.strip('"'))
-            _parse_unix_message(event, stripped)
+            _parse_unix_message(event, bounded)
             yield enrich(event)
 
 

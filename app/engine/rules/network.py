@@ -19,7 +19,10 @@ RULES = [
         "domain, which is how data is smuggled inside DNS.",
         all_of=[C("dns.question.name", "exists", None)],
         any_of=[
-            C("dns.question.name", "any_regex", [r"[a-z0-9+/=_-]{45,}\.", r"(?:[a-f0-9]{20,}\.){2,}"]),
+            # The upper bounds match the DNS limits of 63 characters per label
+            # and keep the pattern linear in the length of the record.
+            C("dns.question.name", "any_regex",
+                [r"[a-z0-9+/=_-]{45,120}\.", r"(?:[a-f0-9]{20,63}\.){2,}"]),
             C("dns.question.type", "in", ["TXT", "NULL", "CNAME", "16", "10"]),
         ],
         keywords=(),

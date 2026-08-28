@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+# A single field value is capped so that one pathological record cannot make
+# every pattern in the library expensive, and so that memory stays bounded.
+MAX_FIELD_LENGTH = 4096
+
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 IPV6_RE = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")
 DOMAIN_RE = re.compile(
@@ -17,7 +21,7 @@ URL_RE = re.compile(r"\bhttps?://[^\s\"'<>\\]+", re.IGNORECASE)
 MD5_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 SHA1_RE = re.compile(r"\b[a-fA-F0-9]{40}\b")
 SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
-EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+EMAIL_RE = re.compile(r"\b[\w.+-]{1,64}@[\w-]{1,63}\.[\w.-]{1,190}\b")
 
 
 @dataclass(slots=True)
@@ -84,6 +88,8 @@ class Event:
             value = value.strip()
             if not value:
                 return
+            if len(value) > MAX_FIELD_LENGTH:
+                value = value[:MAX_FIELD_LENGTH]
         self.fields[name] = value
 
     def setdefault_field(self, name: str, value: Any) -> None:

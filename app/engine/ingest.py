@@ -31,6 +31,10 @@ BINARY_SKIP_EXTENSIONS = {
     ".pyc", ".class", ".jar", ".db", ".sqlite", ".pcap", ".pcapng", ".bin",
 }
 MAX_FILE_BYTES = 400 * 1024 * 1024
+# A single line beyond this is pathological rather than useful. The cap bounds
+# memory and keeps one line from dominating the analysis, while staying large
+# enough for a whole JSON document written on one line.
+MAX_LINE_LENGTH = 4 * 1024 * 1024
 
 
 @dataclass
@@ -41,6 +45,39 @@ class ExtractionResult:
     total_bytes: int = 0
     archive_type: str = "unknown"
     warnings: list[str] = field(default_factory=list)
+
+
+def _looks_like_zip(path: Path) -> bool:
+    """Format probes read the file, so a malformed one must not raise."""
+    try:
+        return zipfile.is_zipfile(path)
+    except Exception:
+        return False
+
+
+def _looks_like_tar(path: Path) -> bool:
+    try:
+        return tarfile.is_tarfile(path)
+    except Exception:
+        # A truncated compressed tar raises here rather than returning False.
+        return False
+
+
+def _copy_bounded(source, sink, budget: int) -> int:
+    """Copy at most ``budget`` bytes and report how many were written.
+
+    The declared size in an archive is written by whoever built it, so the
+    budget is enforced against the bytes that actually arrive rather than
+    against the header.
+    """
+    written = 0
+    while written < budget:
+        chunk = source.read(min(256 * 1024, budget - written))
+        if not chunk:
+            break
+        sink.write(chunk)
+        written += len(chunk)
+    return written
 
 
 def _safe_join(root: Path, member_name: str) -> Path | None:
@@ -60,11 +97,21 @@ def extract_archive(archive_path: Path, destination: Path, max_uncompressed: int
     suffix = archive_path.suffix.lower()
     name = archive_path.name.lower()
 
-    if zipfile.is_zipfile(archive_path):
+    if _looks_like_zip(archive_path):
         result.archive_type = "zip"
-        with zipfile.ZipFile(archive_path) as archive:
+        try:
+            archive = zipfile.ZipFile(archive_path)
+        except (zipfile.BadZipFile, OSError) as error:
+            result.warnings.append(f"The archive could not be opened ({type(error).__name__})")
+            return result
+        with archive:
             total = 0
-            for info in archive.infolist():
+            try:
+                members = archive.infolist()
+            except (zipfile.BadZipFile, OSError):
+                members = []
+                result.warnings.append("The archive index is damaged")
+            for info in members:
                 if info.is_dir():
                     continue
                 target = _safe_join(destination, info.filename)
@@ -74,20 +121,38 @@ def extract_archive(archive_path: Path, destination: Path, max_uncompressed: int
                 if info.file_size > MAX_FILE_BYTES:
                     result.skipped.append(f"{info.filename} (file too large)")
                     continue
-                total += info.file_size
-                if total > max_uncompressed:
-                    result.warnings.append("Extraction stopped at the configured size limit")
+                remaining = max_uncompressed - total
+                if remaining <= 0:
                     break
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info) as source, open(target, "wb") as sink:
-                    shutil.copyfileobj(source, sink, length=1024 * 256)
+                # A damaged or hostile member must not stop the rest of the hunt.
+                try:
+                    with archive.open(info) as source, open(target, "wb") as sink:
+                        total += _copy_bounded(source, sink, min(remaining, MAX_FILE_BYTES))
+                except Exception as error:
+                    result.skipped.append(f"{info.filename} (unreadable, {type(error).__name__})")
+                    if target.exists():
+                        target.unlink(missing_ok=True)
+                    continue
                 result.files.append(target)
+            if total >= max_uncompressed:
+                result.warnings.append("Extraction stopped at the configured size limit")
             result.total_bytes = total
-    elif tarfile.is_tarfile(archive_path):
+    elif _looks_like_tar(archive_path):
         result.archive_type = "tar"
-        with tarfile.open(archive_path) as archive:
+        try:
+            archive = tarfile.open(archive_path)
+        except (tarfile.TarError, OSError) as error:
+            result.warnings.append(f"The archive could not be opened ({type(error).__name__})")
+            return result
+        with archive:
             total = 0
-            for member in archive.getmembers():
+            try:
+                members = archive.getmembers()
+            except (tarfile.TarError, OSError):
+                members = []
+                result.warnings.append("The archive index is damaged")
+            for member in members:
                 if not member.isfile():
                     continue
                 target = _safe_join(destination, member.name)
@@ -97,25 +162,35 @@ def extract_archive(archive_path: Path, destination: Path, max_uncompressed: int
                 if member.size > MAX_FILE_BYTES:
                     result.skipped.append(f"{member.name} (file too large)")
                     continue
-                total += member.size
-                if total > max_uncompressed:
-                    result.warnings.append("Extraction stopped at the configured size limit")
+                remaining = max_uncompressed - total
+                if remaining <= 0:
                     break
-                extracted = archive.extractfile(member)
-                if extracted is None:
-                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with extracted, open(target, "wb") as sink:
-                    shutil.copyfileobj(extracted, sink, length=1024 * 256)
+                try:
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        continue
+                    with extracted, open(target, "wb") as sink:
+                        total += _copy_bounded(extracted, sink, min(remaining, MAX_FILE_BYTES))
+                except Exception as error:
+                    result.skipped.append(f"{member.name} (unreadable, {type(error).__name__})")
+                    if target.exists():
+                        target.unlink(missing_ok=True)
+                    continue
                 result.files.append(target)
+            if total >= max_uncompressed:
+                result.warnings.append("Extraction stopped at the configured size limit")
             result.total_bytes = total
     elif suffix == ".gz" or name.endswith(".gz"):
         result.archive_type = "gzip"
         target = destination / archive_path.name[:-3]
-        with gzip.open(archive_path, "rb") as source, open(target, "wb") as sink:
-            shutil.copyfileobj(source, sink, length=1024 * 256)
-        result.files.append(target)
-        result.total_bytes = target.stat().st_size
+        try:
+            with gzip.open(archive_path, "rb") as source, open(target, "wb") as sink:
+                result.total_bytes = _copy_bounded(source, sink, min(max_uncompressed, MAX_FILE_BYTES))
+            result.files.append(target)
+        except Exception as error:
+            result.warnings.append(f"The compressed file could not be read ({type(error).__name__})")
+            target.unlink(missing_ok=True)
     else:
         # A single log file uploaded without any container.
         result.archive_type = "file"
@@ -204,7 +279,7 @@ def read_lines(path: Path, limit: int | None = None) -> Iterator[str]:
             for index, line in enumerate(handle):
                 if limit is not None and index >= limit:
                     return
-                yield line
+                yield line if len(line) <= MAX_LINE_LENGTH else line[:MAX_LINE_LENGTH]
     except (OSError, EOFError, UnicodeError):
         return
 

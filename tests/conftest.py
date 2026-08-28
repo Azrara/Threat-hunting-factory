@@ -32,6 +32,18 @@ def sample_archive(tmp_path_factory) -> Path:
     return build(target, seed=11)
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_throttle():
+    """The limiters are process wide, so tests must not leak state into each other."""
+    from app.throttle import account_limiter, address_limiter
+
+    account_limiter.clear()
+    address_limiter.clear()
+    yield
+    account_limiter.clear()
+    address_limiter.clear()
+
+
 @pytest.fixture()
 def client():
     from fastapi.testclient import TestClient
