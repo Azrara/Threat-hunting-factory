@@ -22,12 +22,23 @@ impact and recommendations. Access is scoped per tenant and per user.
 6. **Track the programme.** The home dashboard aggregates hunts, observations, ATT&CK coverage,
    telemetry analysed and risk over time.
 
+## Requirements
+
+Python 3.11 or newer. The test suite is run on 3.11, 3.12 and 3.13. There is nothing else to install:
+the engine has no compiled dependencies and the interface has no build step.
+
 ## Quick start
 
 ```bash
 git clone https://github.com/Azrara/Threat-hunting-factory.git
 cd Threat-hunting-factory
 ./run.sh                     # creates the virtual environment on first run
+```
+
+If your default `python3` is older, point the script at a newer one:
+
+```bash
+PYTHON=python3.12 ./run.sh
 ```
 
 Open http://127.0.0.1:8000 and sign in to the demonstration workspace:

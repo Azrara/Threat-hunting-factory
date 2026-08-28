@@ -1,0 +1,4 @@
+Static assets served at /assets are placed here.
+
+This file exists because git does not track empty directories. Without it a
+fresh clone has no web/assets, and the application refused to start.

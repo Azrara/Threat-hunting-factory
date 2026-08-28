@@ -78,9 +78,13 @@ def health() -> dict:
 
 
 if settings.web_dir.exists():
-    app.mount("/assets", StaticFiles(directory=settings.web_dir / "assets"), name="assets")
-    app.mount("/css", StaticFiles(directory=settings.web_dir / "css"), name="css")
-    app.mount("/js", StaticFiles(directory=settings.web_dir / "js"), name="js")
+    for mount in ("assets", "css", "js"):
+        directory = settings.web_dir / mount
+        # Git does not track empty directories, so a fresh clone can be missing
+        # one. Creating it here means a missing optional directory cannot stop
+        # the application from starting at all.
+        directory.mkdir(parents=True, exist_ok=True)
+        app.mount(f"/{mount}", StaticFiles(directory=directory), name=mount)
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
