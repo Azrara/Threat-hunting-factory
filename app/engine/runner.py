@@ -35,6 +35,8 @@ SOURCE_ALIGNMENT = {
     "syslog": "linux_auth",
     "endpoint": "edr",
     "entra_signin": "entra_signin",
+    "k8s_audit": "k8s_audit",
+    "idp": "idp",
 }
 
 SEVERITY_WEIGHT = {"critical": 30.0, "high": 16.0, "medium": 7.0, "low": 2.5, "info": 1.0}

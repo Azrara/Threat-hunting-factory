@@ -36,7 +36,9 @@ class Settings:
         self.max_uncompressed_bytes: int = int(
             os.environ.get("THF_MAX_UNCOMPRESSED_BYTES", str(2 * 1024 * 1024 * 1024))
         )
-        self.max_events: int = int(os.environ.get("THF_MAX_EVENTS", "750000"))
+        # A parsed record costs roughly 1.5 KB, so the default cap keeps a single
+        # hunt under about one gigabyte of resident memory.
+        self.max_events: int = int(os.environ.get("THF_MAX_EVENTS", "500000"))
         self.max_observations_per_rule: int = int(
             os.environ.get("THF_MAX_OBS_PER_RULE", "50")
         )

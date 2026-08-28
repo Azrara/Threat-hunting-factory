@@ -19,7 +19,10 @@ from .event import Event
 from .fieldmap import canonical_key, flatten
 from .timeparse import find_timestamp, parse_timestamp
 
-MAX_RAW_LENGTH = 8000
+# Each retained record costs roughly its raw length in memory, so the cap
+# bounds the worst case for files with pathologically long lines. Evidence
+# excerpts are truncated to 900 characters when reported anyway.
+MAX_RAW_LENGTH = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +110,16 @@ def classify_data_source(event: Event) -> str | None:
     """
     keys = {key.lower() for key in event.extra}
 
+    # Kubernetes audit records carry an unmistakable envelope.
+    if "audit.k8s.io" in event.raw or ("objectref.resource" in keys and "requesturi" in keys):
+        return "k8s_audit"
+    if "requesturi" in keys and "verb" in keys and "user.username" in keys:
+        return "k8s_audit"
+    # Identity provider events name the actor and the outcome reason.
+    if "eventtype" in keys and ("displaymessage" in keys or "authenticationcontext.authenticationstep" in keys):
+        return "idp"
+    if "actor.alternateid" in keys or "outcome.reason" in keys:
+        return "idp"
     if {"workload", "recordtype"} <= keys or "auditdata" in keys:
         return "o365_audit"
     if {"eventname", "eventsource"} <= keys or "useridentity" in keys or event.get("aws.event_name"):
@@ -274,7 +287,14 @@ class JsonParser(BaseParser):
         lowered = {key.lower() for key in flat}
         for key, value in flat.items():
             assign(event, key, value)
-        if any(hint in lowered for hint in _CLOUDTRAIL_HINTS):
+        if "audit.k8s.io" in raw or ({"requesturi", "verb"} <= lowered and "objectref.resource" in lowered):
+            event.data_source = "k8s_audit"
+            event.log_format = "k8s_audit"
+            _map_kubernetes(event, flat)
+        elif "eventtype" in lowered and ("displaymessage" in lowered or "actor.alternateid" in lowered):
+            event.data_source = "idp"
+            event.log_format = "idp"
+        elif any(hint in lowered for hint in _CLOUDTRAIL_HINTS):
             event.data_source = "aws_cloudtrail"
             event.log_format = "cloudtrail"
             event.set("cloud.provider", "aws")
@@ -305,6 +325,34 @@ class JsonParser(BaseParser):
         elif event.get("http.request.method") or event.get("url.original"):
             event.data_source = "web"
         return enrich(event)
+
+
+def _map_kubernetes(event: Event, flat: dict[str, Any]) -> None:
+    """Map the Kubernetes audit envelope onto the common schema."""
+    user = flat.get("user.username") or flat.get("impersonatedUser.username")
+    if user:
+        event.set("user.name", user)
+    source_ips = flat.get("sourceIPs")
+    if source_ips:
+        event.set("source.ip", str(source_ips).split(",")[0].strip())
+    verb = flat.get("verb")
+    resource = flat.get("objectRef.resource")
+    subresource = flat.get("objectRef.subresource")
+    name = flat.get("objectRef.name")
+    if verb and resource:
+        action = f"{verb} {resource}" + (f"/{subresource}" if subresource else "")
+        event.set("event.action", action)
+    if name:
+        event.set("container.name", name)
+    if flat.get("objectRef.namespace"):
+        event.set("kubernetes.namespace", flat["objectRef.namespace"])
+    status = flat.get("responseStatus.code")
+    if status is not None:
+        event.set("event.outcome", "success" if str(status).startswith("2") else "failure")
+    event.set("event.provider", "kubernetes")
+    # The verb is a Kubernetes action, not an HTTP method.
+    event.fields.pop("http.request.method", None)
+    event.fields.pop("url.original", None)
 
 
 def _map_cloudtrail(event: Event, flat: dict[str, Any]) -> None:

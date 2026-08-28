@@ -24,6 +24,8 @@ _register(STRONG_ALIASES, "timestamp", """
     timegenerated timecreated systemtime eventreceivedtime creationtime
     logtime ts rt start receipttime createdat created_at date_created
     utctime eventdate occurredat activitydatetime timestamp_utc
+    requestreceivedtimestamp stagetimestamp published publishedat eventtimestamp
+    firstseen lastseen detectiontime insertid receivedat ingesttime
 """)
 _register(STRONG_ALIASES, "host.name", """
     hostname host_name computer computername machinename machine_name
@@ -35,11 +37,19 @@ _register(STRONG_ALIASES, "host.ip", """
     host_ip hostip dvc deviceaddress agent_ip local_ip localip
 """)
 _register(STRONG_ALIASES, "user.name", """
-    username user_name accountname account_name subjectusername
+    username user_name accountname account_name
     targetusername suser duser samaccountname userprincipalname upn
     caller_username callerusername actor_name principalname identityname usrname
-    logon_user login user_id_name onbehalfofuser subject_user_name
-    target_user_name useridentity_username requestor
+    logon_user login user_id_name onbehalfofuser
+    useridentity_username requestor
+""")
+_register(STRONG_ALIASES, "user.actor", """
+    subjectusername subject_user_name subjectaccountname callerusername
+    initiatedby_user actorusername
+""")
+_register(WEAK_ALIASES, "user.name", "subjectusername subject_user_name")
+_register(STRONG_ALIASES, "user.target", """
+    targetaccountname target_account_name objectusername memberaccountname
 """)
 _register(STRONG_ALIASES, "user.domain", """
     userdomain subjectdomainname targetdomainname user_domain
@@ -180,7 +190,7 @@ _register(STRONG_ALIASES, "email.subject", "subject mail_subject")
 _register(STRONG_ALIASES, "container.name", "container_name pod_name podname")
 _register(STRONG_ALIASES, "error.message", "error errormessage error_message failurereason failure_reason")
 
-_register(WEAK_ALIASES, "user.name", "user account principal identity actor subject caller owner")
+_register(WEAK_ALIASES, "user.name", "user account principal identity actor subject caller owner alternateid")
 _register(WEAK_ALIASES, "host.name", "host computer machine device node server agent source_name")
 _register(WEAK_ALIASES, "source.ip", "src ip clientaddr addr address peer")
 _register(WEAK_ALIASES, "destination.ip", "dst dest destination target remote")

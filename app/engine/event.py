@@ -20,7 +20,7 @@ SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
 EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 
 
-@dataclass
+@dataclass(slots=True)
 class Event:
     """A single log record after normalisation.
 
@@ -106,6 +106,10 @@ class Event:
         return self._searchable_cache
 
     _searchable_cache: str | None = field(default=None, repr=False, compare=False)
+
+    def release_cache(self) -> None:
+        """Drop the lowercased search text once matching is finished."""
+        self._searchable_cache = None
 
     @property
     def datetime_utc(self) -> datetime | None:

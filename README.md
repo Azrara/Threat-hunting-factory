@@ -4,11 +4,11 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-463%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-101-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-75-000000)
+![status](https://img.shields.io/badge/tests-710%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
-1. **Choose a hypothesis.** 26 hypotheses across three families: threat intelligence scenarios tied to
+1. **Choose a hypothesis.** 33 hypotheses across three families: threat intelligence scenarios tied to
    named actors, standard technique based hunts, and mathematical hunts built on Shannon entropy,
    Fourier analysis, frequency stacking, robust outlier detection and Benford's law.
 2. **Collect the right evidence.** Each hypothesis declares the data sources it needs, in what format,
@@ -44,9 +44,10 @@ Generate a realistic evidence archive to try it out:
 .venv/bin/python tools/generate_sample_evidence.py sample-evidence.zip
 ```
 
-The archive contains Windows Security events, Sysmon XML, Linux auth logs, web access logs, Zeek DNS,
-firewall flows, AWS CloudTrail and a Microsoft 365 audit export, with a small number of real attack
-behaviours planted inside a large volume of benign activity.
+The archive contains Windows Security events, Sysmon XML, Active Directory events, Linux auth logs,
+macOS telemetry, web access logs, Zeek DNS, firewall flows, AWS CloudTrail, a Microsoft 365 audit
+export, a Kubernetes audit log, an identity provider system log, source control audit entries and a
+database error log, with real attack behaviours planted inside a large volume of benign activity.
 
 Run the test suite:
 
@@ -72,6 +73,7 @@ timestamps and indicators. Supported formats:
 | Network    | Zeek TSV (`conn.log`, `dns.log`, `http.log`), flow exports, Suricata EVE JSON |
 | Appliance  | CEF (ArcSight), LEEF (QRadar) |
 | Cloud      | AWS CloudTrail (`Records` wrapper or one event per line), Microsoft 365 unified audit, Entra ID sign ins |
+| Platform   | Kubernetes API server audit, identity provider system logs, source control and pipeline audit |
 | Fallback   | Any free text, with timestamp recovery, key value extraction and indicator extraction |
 
 Every record is normalised into an Elastic Common Schema style document through a field alias table
@@ -82,13 +84,28 @@ flows is still recognised as network telemetry.
 
 | Style | Count | What it does |
 |-------|-------|--------------|
-| `pattern` | 73 | Single event matching on normalised fields or raw text |
-| `threshold` | 13 | Sliding window counting per group, with distinct value counting for spraying and scanning |
+| `pattern` | 103 | Single event matching on normalised fields or raw text |
+| `threshold` | 18 | Sliding window counting per group, with distinct value counting for spraying and scanning |
 | `sequence` | 2 | Ordered stages that must occur for the same entity inside a window |
 | `statistical` | 13 | Whole dataset mathematics |
 
 The engine performs one pass over the events. Rules declare keywords and event codes that build an
 inverted index, so only the candidate rules are evaluated per record rather than the whole library.
+
+### How the prefilter works
+
+Each record is tokenised once into its alphanumeric runs, and that set is intersected with an index
+built from the rule keywords. A keyword is indexed on its most selective run, so `certutil.exe` is
+indexed on `certutil`: any record containing the keyword necessarily contains the run, which keeps
+the index sound while the rule selector still performs the exact test. Short bare identifiers such as
+`akia` are also indexed as prefixes, because credential formats put a marker in front of random
+characters and a plain token match would miss them.
+
+This matters more than it sounds. A single alternation regex over every keyword was measured at
+roughly 240 microseconds per record; the index does the same work in under 10, which is the
+difference between a large archive being analysable and not. `tests/test_engine_performance.py`
+asserts the index never drops a rule that the contract keeps, checked against the real generated
+evidence rather than against synthetic strings.
 
 ### The mathematics
 
@@ -104,17 +121,30 @@ inverted index, so only the candidate rules are evaluated per record rather than
 
 ### Coverage
 
-101 detections mapping to 75 MITRE ATT&CK techniques across credential access, execution, persistence,
+136 detections mapping to 96 MITRE ATT&CK techniques across credential access, execution, persistence,
 privilege escalation, defense evasion, discovery, lateral movement, collection, command and control,
-exfiltration and impact, for Windows, Linux, containers, web applications, network telemetry and the
-cloud control plane.
+exfiltration and impact.
+
+| Surface | What is covered |
+|---------|-----------------|
+| Windows endpoint | Credential dumping, encoded PowerShell, living off the land binaries, recovery inhibition, defence tampering, persistence, discovery, lateral movement |
+| Active Directory | Certificate template abuse, shadow credentials, delegation, group policy, trusts, the DPAPI backup key, directory permissions, Netlogon and spooler exploitation, bulk enumeration |
+| Linux and containers | Brute force, reverse shells, cron and systemd persistence, privilege escalation, history tampering, container escape |
+| macOS | Launch item persistence, AppleScript abuse, Gatekeeper and quarantine tampering, keychain access |
+| Kubernetes | Pod exec, privileged workloads, RBAC escalation, secret enumeration, anonymous API access, image provenance |
+| Web and application | Injection, traversal, web shells, Log4Shell, edge product exploitation, scanning, credential stuffing |
+| Network | Beaconing, DNS tunnelling, port and host sweeps, anonymisers, exfiltration to file sharing services |
+| Cloud control plane | Identity escalation, logging tampering, public storage, destructive operations, application consent |
+| Identity and SaaS | Multi factor fatigue, session replay, admin role grants, API tokens, bulk download |
+| Source control and pipelines | Workflow tampering, runner registration, repository export, secrets in logs |
+| Database | Command execution from the engine, bulk export, privilege changes, authentication attacks |
 
 ## Hypothesis catalogue
 
 | Family | Examples |
 |--------|----------|
-| Threat intelligence | Ransomware deployment precursors, commercial command and control beaconing, cloud identity intrusion, help desk social engineering, living off the land intrusions, edge service exploitation, business email compromise |
-| Technique | Credential access, persistence sweep, lateral movement, privilege escalation, defense evasion, discovery, exfiltration, phishing execution chain, brute force, cloud control plane, container workloads, insider data access |
+| Threat intelligence | Ransomware deployment precursors, commercial command and control beaconing, cloud identity intrusion, help desk social engineering, living off the land intrusions, edge service exploitation, business email compromise, Active Directory escalation paths, federated identity takeover |
+| Technique | Credential access, persistence sweep, lateral movement, privilege escalation, defense evasion, discovery, exfiltration, phishing execution chain, brute force, cloud control plane, container workloads, insider data access, Kubernetes compromise, pipeline tampering, database compromise, macOS endpoint, secret exposure |
 | Mathematical | Fourier beaconing, Shannon entropy, long tail stacking, robust outlier detection, Benford's law, temporal profiling, full spectrum analysis |
 
 ## Architecture
@@ -139,9 +169,9 @@ app/
     executor.py        Single pass rule execution and aggregation
     runner.py          Extract, parse, detect, score
     catalog.py         Hypotheses and data source definitions
-    rules/             The detection library
+    rules/             The detection library, one module per surface
 web/                   Vanilla JavaScript interface, no build step
-tests/                 463 tests
+tests/                 710 tests
 tools/                 Sample evidence generator
 ```
 
@@ -166,8 +196,24 @@ Every hunt, observation and report is scoped to a tenant. Cross tenant reads ret
 | `THF_JWT_TTL_MINUTES` | `720` | Session lifetime |
 | `THF_MAX_ARCHIVE_BYTES` | `536870912` | Upload size limit |
 | `THF_MAX_UNCOMPRESSED_BYTES` | `2147483648` | Extraction size limit |
-| `THF_MAX_EVENTS` | `750000` | Records analysed per hunt |
+| `THF_MAX_EVENTS` | `500000` | Records analysed per hunt, see the performance note below |
 | `THF_SEED_DEMO` | `1` | Create the demonstration workspace on start up |
+
+## Performance
+
+Measured on a single container core against a generated archive of 500,000 records spread over
+Windows, Sysmon, web, flow and DNS files:
+
+| Stage | Throughput | Notes |
+|-------|-----------|-------|
+| Extract and parse | about 27,000 records a second | 500,000 records in roughly 18 seconds |
+| Detect, focused hypothesis (16 rules) | about 33,000 records a second | roughly 15 seconds |
+| Detect, full library (136 rules) | about 16,000 records a second | roughly 32 seconds |
+
+A parsed record costs roughly 1.5 KB of memory because it retains its original line for evidence, so
+500,000 records occupy about 900 MB. `THF_MAX_EVENTS` defaults to 500,000 for that reason; raise it
+only where the memory is available. When the cap is reached the hunt still completes and the report
+records that later records were not analysed.
 
 ## API
 

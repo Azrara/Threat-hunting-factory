@@ -57,14 +57,15 @@ class TestParsing:
     def test_every_file_is_parsed(self, sample_archive, tmp_path):
         context, outcome = parse_evidence(sample_archive, tmp_path / "work")
         assert outcome.events_parsed > 3000
-        assert len(outcome.files) == 9
+        assert len(outcome.files) == 15
         formats = {file.log_format for file in outcome.files}
         assert {"json", "windows_evtx_xml", "syslog", "http_access", "zeek_tsv", "csv"} <= formats
 
     def test_data_sources_are_classified(self, sample_archive, tmp_path):
         _, outcome = parse_evidence(sample_archive, tmp_path / "work")
         for expected in ("windows_security", "sysmon", "linux_auth", "web", "dns",
-                         "network_flow", "aws_cloudtrail", "o365_audit"):
+                         "network_flow", "aws_cloudtrail", "o365_audit", "k8s_audit",
+                         "idp", "endpoint"):
             assert outcome.data_sources.get(expected, 0) > 0, expected
 
     def test_the_timeline_is_recovered(self, sample_archive, tmp_path):
@@ -103,6 +104,30 @@ class TestFullSpectrumHunt:
             "cloud-mailbox-rule-abuse",       # New-InboxRule
             "stat-beaconing-fft",             # sixty second beacon
             "stat-dga-entropy",               # generated domains
+            "ad-certificate-template-abuse",  # certificate with a foreign subject
+            "ad-shadow-credentials",          # key credential link written
+            "ad-delegation-abuse",            # resource based delegation
+            "ad-group-policy-modified",       # policy object created
+            "ad-ldap-enumeration",            # bulk directory reads
+            "idp-mfa-push-fatigue",           # repeated challenges
+            "idp-session-hijack-indicator",   # token replay
+            "idp-admin-role-granted",         # super admin assigned
+            "idp-api-token-created",          # organisation token
+            "k8s-exec-into-pod",              # shell inside a workload
+            "k8s-privileged-workload",        # privileged pod admitted
+            "k8s-rbac-escalation",            # cluster-admin binding
+            "k8s-secret-enumeration",         # bulk secret reads
+            "db-command-execution",           # xp_cmdshell
+            "db-mass-export",                 # backup to a public path
+            "db-privilege-change",            # new sysadmin login
+            "db-authentication-failures",     # failed sa logons
+            "mac-launch-persistence",         # launch daemon installed
+            "mac-osascript-abuse",            # AppleScript with privileges
+            "mac-security-control-tampering", # Gatekeeper disabled
+            "mac-credential-access",          # keychain dump
+            "scm-repository-exfiltration",    # repository made public
+            "cicd-pipeline-tampering",        # workflow file changed
+            "saas-secret-in-log",             # access key in a build log
         }
         missing = expected - found
         assert not missing, f"detections that did not fire: {sorted(missing)}"
@@ -154,6 +179,13 @@ class TestTargetedHypotheses:
         ("tech-cloud-control-plane", "cloud-logging-disabled"),
         ("math-shannon-entropy", "stat-dga-entropy"),
         ("math-fourier-beaconing", "stat-beaconing-fft"),
+        ("cti-directory-escalation", "ad-certificate-template-abuse"),
+        ("cti-saas-account-takeover", "idp-mfa-push-fatigue"),
+        ("tech-kubernetes-compromise", "k8s-rbac-escalation"),
+        ("tech-database-compromise", "db-command-execution"),
+        ("tech-macos-endpoint", "mac-launch-persistence"),
+        ("tech-supply-chain-pipeline", "cicd-pipeline-tampering"),
+        ("tech-secret-exposure", "saas-secret-in-log"),
     ])
     def test_hypothesis_finds_its_signature(self, sample_archive, tmp_path, hypothesis_id, expected):
         outcome = run_hunt(sample_archive, tmp_path / hypothesis_id, get_hypothesis(hypothesis_id))

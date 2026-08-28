@@ -7,14 +7,22 @@ identifier or by tag, so the catalogue and the engine stay decoupled.
 from __future__ import annotations
 
 from .base import Finding, PatternRule, Rule, SequenceRule, StatisticalRule, ThresholdRule
-from . import cloud, linux, malware, network, statistical, web, windows
+from . import (
+    cloud, database, directory, kubernetes, linux, macos, malware, network, saas,
+    statistical, web, windows,
+)
 
 ALL_RULES: list[Rule] = [
     *windows.RULES,
+    *directory.RULES,
     *linux.RULES,
+    *macos.RULES,
     *web.RULES,
     *network.RULES,
     *cloud.RULES,
+    *saas.RULES,
+    *kubernetes.RULES,
+    *database.RULES,
     *malware.RULES,
     *statistical.RULES,
 ]
