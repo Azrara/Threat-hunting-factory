@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1300%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1445%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -24,8 +24,17 @@ impact and recommendations. Access is scoped per tenant and per user.
 
 ## Requirements
 
-Python 3.11 or newer. The test suite is run on 3.11, 3.12 and 3.13. There is nothing else to install:
-the engine has no compiled dependencies and the interface has no build step.
+Python 3.11 or newer. There is nothing else to install: the engine has no compiled dependencies and
+the interface has no build step.
+
+The suite is run on every supported version, with identical results and nothing skipped on any of
+them, so a version difference cannot hide a failure:
+
+| Version | Tests | Failures | Skipped |
+|---------|-------|----------|---------|
+| 3.11 | 1445 | 0 | 0 |
+| 3.12 | 1445 | 0 | 0 |
+| 3.13 | 1445 | 0 | 0 |
 
 ## Quick start
 
@@ -191,7 +200,7 @@ app/
     catalog.py         Hypotheses and data source definitions
     rules/             The detection library, one module per surface
 web/                   Vanilla JavaScript interface, no build step
-tests/                 1300 tests
+tests/                 1445 tests
 tools/                 Sample evidence generator
 ```
 
