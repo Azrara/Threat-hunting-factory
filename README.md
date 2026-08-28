@@ -241,7 +241,7 @@ untrusted paths were tested rather than assumed. What was found and fixed:
 
 | Finding | Effect | Fix |
 |---------|--------|-----|
-| Catastrophic backtracking in the syslog helper | One long line hung the analysis indefinitely, measured at 31 seconds for a single 50,000 character line | Quantifiers bounded; every pattern in the rule library and the parsing layer is now measured for linear scaling by `tests/test_redos.py` |
+| Catastrophic backtracking in the syslog helper | One long line stalled the analysis for practical purposes. Measured pre fix at 31 seconds for a 50,000 character line and 34 minutes for 400,000, quadrupling with every doubling. Extrapolating that curve, the 20 MB line that first exposed it would have run for weeks | Quantifiers bounded and helper input capped, which takes the same measurement to under 10 milliseconds at every size. Every pattern in the rule library and the parsing layer is now measured for linear scaling by `tests/test_redos.py` |
 | Quadratic patterns in four detection rules | A crafted record cost 2 seconds per rule | Bounded to the lengths the formats actually allow |
 | Extraction trusted the archive's declared sizes | The size budget could be bypassed by a lying header | The budget counts bytes actually written |
 | A damaged archive member aborted the whole hunt | One corrupt file destroyed the analysis of every other file | Members are skipped individually and reported; the format probes are guarded because they read the file and can raise |
