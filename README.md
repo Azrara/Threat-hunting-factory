@@ -292,9 +292,10 @@ unencrypted on disk under the data directory.
 
 ## Roadmap
 
-[Two local AI agents](docs/ai-agents-design.md) are designed but not implemented: an agent that reads
-CTI reporting and drafts hunting hypotheses, and an agent that finds suspicious behaviour beyond the
-fixed rule library. Both run on open source models served locally by Ollama, so no evidence leaves the
+[Two local AI agents](docs/ai-agents-design.md) are designed but not implemented: a collector that
+runs once a day, fetches CTI reporting and research papers on its own and turns them into hypotheses
+with their technique, tactic, required data and source link, and an analyst agent that finds
+suspicious behaviour beyond the fixed rule library. Both run on open source models served locally by Ollama, so no evidence leaves the
 tenant, and both are optional: the platform works unchanged with no model server installed.
 
 ## Limitations
