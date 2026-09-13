@@ -256,6 +256,13 @@ p { margin: 0 0 12px; line-height: 1.6; }
   letter-spacing: .02em;
 }
 .tag-green { background: var(--green-soft); color: #4a6b12; border-color: #cfe6a8; }
+
+.ai-chip { cursor: default; max-width: 190px; }
+.ai-chip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }
+.ai-dot[data-state="ready"] { background: var(--green); }
+.ai-dot[data-state="degraded"] { background: var(--medium); }
+.ai-dot[data-state="offline"] { background: var(--line); }
 .tag-dark { background: var(--ink); color: var(--white); border-color: var(--ink); }
 
 .sev {

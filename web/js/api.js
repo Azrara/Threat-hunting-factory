@@ -78,6 +78,7 @@ export const api = {
   register: (payload) => request("/api/auth/register", { method: "POST", json: payload }),
   login: (payload) => request("/api/auth/login", { method: "POST", json: payload }),
   me: () => request("/api/auth/me"),
+  aiStatus: () => request("/api/ai/status"),
 
   hypotheses: (params = {}) => request(`/api/hypotheses?${new URLSearchParams(params)}`),
   hypothesis: (id) => request(`/api/hypotheses/${encodeURIComponent(id)}`),

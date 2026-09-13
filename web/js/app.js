@@ -28,6 +28,44 @@ const NAV = [
 
 const root = document.getElementById("app");
 let cleanup = null;
+// Asked for once per session rather than on every route change. The server caches
+// it too, so a missing model server costs one refused connection, not one per page.
+let aiStatus = null;
+
+function aiChip() {
+  const dot = el("span", { class: "ai-dot" });
+  const label = el("span", { text: "AI" });
+  const chip = el("span", { class: "tag ai-chip", title: "Checking the local model layer" }, [dot, label]);
+
+  function apply(status) {
+    if (!status || !status.enabled) {
+      chip.remove();
+      return;
+    }
+    const model = status.model || {};
+    const ready = Boolean(status.ready);
+    chip.className = `tag ai-chip ${ready ? "tag-green" : ""}`;
+    dot.dataset.state = ready ? "ready" : status.reachable ? "degraded" : "offline";
+    label.textContent = ready ? model.tag || "AI ready" : status.reachable ? "AI degraded" : "AI offline";
+    if (ready) {
+      chip.title = `Local model ${model.tag} running on ${(status.hardware || {}).accelerator || "this host"}`;
+    } else {
+      const reason = status.degraded_reason || "The local model layer is unavailable";
+      chip.title = model.pull_command ? `${reason}. Run: ${model.pull_command}` : reason;
+    }
+  }
+
+  if (aiStatus) apply(aiStatus);
+  else {
+    api.aiStatus()
+      .then((status) => {
+        aiStatus = status;
+        apply(status);
+      })
+      .catch(() => chip.remove());
+  }
+  return chip;
+}
 
 function navigate(hash) {
   if (window.location.hash === hash) render();
@@ -97,6 +135,7 @@ function shell(route) {
         el("div", { class: "muted text-sm mt-1", text: active.subtitle }),
       ]),
       el("div", { class: "row" }, [
+        aiChip(),
         el("button", {
           class: "btn btn-ghost btn-sm menu-toggle",
           onclick: () => document.getElementById("sidebar")?.classList.toggle("open"),

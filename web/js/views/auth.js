@@ -10,9 +10,11 @@ const POINTS = [
 export function renderAuth(root, onSignedIn) {
   let mode = "login";
   let engine = { total: 0, mitre_techniques: 0 };
+  let hypotheses = 0;
 
   api.health().then((data) => {
     engine = data.engine || engine;
+    hypotheses = data.hypotheses || 0;
     draw();
   }).catch(() => draw());
 
@@ -33,7 +35,7 @@ export function renderAuth(root, onSignedIn) {
       el("div", { class: "auth-stats" }, [
         stat(engine.total || 0, "Detections"),
         stat(engine.mitre_techniques || 0, "ATT&CK techniques"),
-        stat(26, "Hypotheses"),
+        stat(hypotheses, "Hypotheses"),
       ]),
     ]);
   }

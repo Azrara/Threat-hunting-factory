@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1445%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1524%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1445 | 0 | 0 |
-| 3.12 | 1445 | 0 | 0 |
-| 3.13 | 1445 | 0 | 0 |
+| 3.11 | 1524 | 0 | 0 |
+| 3.12 | 1524 | 0 | 0 |
+| 3.13 | 1524 | 0 | 0 |
 
 ## Quick start
 
@@ -292,11 +292,21 @@ unencrypted on disk under the data directory.
 
 ## Roadmap
 
-[Two local AI agents](docs/ai-agents-design.md) are designed but not implemented: a collector that
-runs once a day, fetches CTI reporting and research papers on its own and turns them into hypotheses
-with their technique, tactic, required data and source link, and an analyst agent that finds
-suspicious behaviour beyond the fixed rule library. Both run on open source models served locally by Ollama, so no evidence leaves the
-tenant, and both are optional: the platform works unchanged with no model server installed.
+[Two local AI agents](docs/ai-agents-design.md) are being built on open source models served locally
+by Ollama, so no evidence ever leaves the tenant: a collector that polls CTI reporting and research
+papers on its own and turns them into hypotheses with their technique, tactic, required data and
+source link, and an analyst agent that finds suspicious behaviour beyond the fixed rule library.
+
+The foundation is in place. The platform detects what the host can run, picks the best model from a
+ranked ladder, and reports it at `GET /api/ai/status` and in the header. Everything else is designed
+and not yet implemented. The whole layer is optional at every step: with no model server installed the
+platform behaves exactly as it does today.
+
+```
+THF_AI_MODEL      override the automatic model choice
+THF_OLLAMA_URL    the model server, default http://127.0.0.1:11434
+THF_AI_ENABLED    set to 0 to switch the layer off entirely
+```
 
 ## Limitations
 

@@ -12,9 +12,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import SessionLocal, init_db
-from .engine.catalog import validate_catalogue
+from .engine.catalog import HYPOTHESES, validate_catalogue
 from .engine.rules import statistics as rule_statistics
-from .routers import admin, auth, catalog, hunts, reports, stats
+from .routers import admin, ai, auth, catalog, hunts, reports, stats
 from .seed import seed_demo
 
 logger = logging.getLogger("thf")
@@ -50,6 +50,7 @@ app.include_router(hunts.router)
 app.include_router(reports.router)
 app.include_router(stats.router)
 app.include_router(admin.router)
+app.include_router(ai.router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -74,6 +75,7 @@ def health() -> dict:
         "application": settings.app_name,
         "version": settings.app_version,
         "engine": rule_statistics(),
+        "hypotheses": len(HYPOTHESES),
     }
 
 

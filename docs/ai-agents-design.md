@@ -157,17 +157,20 @@ the existing hypothesis as an additional reference, which is how the catalogue a
 instead of accumulating near duplicates. Same technique plus same platform is treated as the same
 hypothesis by default.
 
-**Volume control.** A cap on new hypotheses per day (default 10), a minimum confidence, and a
-requirement that at least one data source mapped. Candidates over the cap wait for the next day rather
-than being lost.
+**Volume control.** A cap per weekly batch (default 25), a minimum confidence, and a requirement that
+at least one data source mapped. Candidates over the cap wait for the next batch rather than being
+lost.
 
-### Auto publication and the quality gate
+### The review queue
 
-The collector feeds the database directly, as intended, but not blindly. A candidate is published
-automatically when it passes every validator, maps to at least one data source, and is not a
-duplicate. Anything that fails one of those lands in a review queue with the reason shown. An analyst
-can reject or edit a published hypothesis at any time, and a rejected source URL is remembered so the
+Nothing publishes itself. Every candidate waits for an analyst, so the validators are a quality label
+rather than a gate: a candidate that passed every check is marked ready and accepted in one click or
+in bulk, and one that failed shows which check and why. A rejected source URL is remembered, so the
 same article is never proposed twice.
+
+Candidates are collected daily but presented as one weekly batch, so the queue is reviewed once a week
+rather than every morning. A batch of 15 to 40 candidates, each showing its statement, technique,
+tactic, data sources, source link and the quoted passage behind it, is a few minutes of work.
 
 ### What happens when no rule covers the technique
 
@@ -178,7 +181,12 @@ is itself useful output, because it tells the team exactly what the 136 rule lib
 
 ### Scheduling and operation
 
-An in process scheduler thread with a persisted last run timestamp, default 02:00 local time, plus:
+Fetching and reviewing run on different rhythms. Feeds are polled **daily** at 02:00, because an RSS
+feed carries only recent items and a weekly poll would silently miss whatever scrolled off it.
+Candidates accumulate and are presented as **one weekly batch**, Monday at 08:00 by default. Both are
+configurable through `THF_CTI_FETCH_CRON` and `THF_CTI_REVIEW_CADENCE`.
+
+An in process scheduler thread with a persisted last run timestamp, plus:
 
 * `POST /api/cti/collector/run` to trigger a run on demand,
 * `python -m app.ai.collector --once` so the run can be driven by cron or a systemd timer instead,
@@ -291,22 +299,39 @@ reference observations that exist, checked by identifier.
 
 ## 5. Models and hardware
 
-| Role | Default | Small machine | Workstation |
-|---|---|---|---|
-| Extraction, adjudication, narration | `qwen2.5:14b-instruct-q4_K_M` | `llama3.1:8b-instruct-q4_K_M` | `qwen2.5:32b-instruct-q4_K_M` or `gpt-oss:20b` |
-| Embeddings for relevance and dedupe | `nomic-embed-text` | `nomic-embed-text` | `bge-m3` for multilingual CTI |
+The right model is the best one the host can actually run, so the platform does not hard code one. It
+ships a ranked ladder, detects system memory and whether an NVIDIA GPU is present, and picks the best
+entry that fits. `THF_AI_MODEL` overrides the choice for an operator who knows better.
 
-Selection criteria: JSON schema adherence under `format`, at least 16k of context, a permissive
-licence, and a standard Ollama tag. Qwen 2.5 14B holds structured output better than Llama 3.1 8B at
-this task while still fitting in 12 GB of VRAM at Q4.
+| Model | Parameters | Active | Needs | Licence | Why it is on the ladder |
+|---|---|---|---|---|---|
+| `gpt-oss:120b` | 120B | 5.1B | 80 GB VRAM | Apache 2.0 | Best quality available locally |
+| `qwen3:32b` | 32B | 32B | 24 GB VRAM | Apache 2.0 | Best dense model on a single workstation card |
+| `qwen3:30b-a3b` | 30B | 3B | 22 GB | Apache 2.0 | Mixture of experts: 30B of knowledge at 3B speed |
+| `gpt-oss:20b` | 20B | 3.6B | 16 GB | Apache 2.0 | Strong structured output, fits a 16 GB host |
+| `qwen3:14b` | 14B | 14B | 12 GB VRAM | Apache 2.0 | Dense fallback for a 12 GB card |
+| `qwen3:8b` | 8B | 8B | 7 GB | Apache 2.0 | Runs on any laptop |
+| `llama3.1:8b` | 8B | 8B | 7 GB | Meta Community | Last resort, licence needs review before client use |
+
+Embeddings, for relevance ranking and deduplication: `bge-m3` when memory allows, since threat
+intelligence is not only in English, otherwise `nomic-embed-text`.
+
+**The ladder is ordered differently for CPU and GPU**, and that is the point of having two. A mixture
+of experts model activates a fraction of its parameters per token, so `qwen3:30b-a3b` is several times
+faster than the dense `qwen3:32b` on a CPU while knowing about as much. On a GPU, where the whole model
+is resident anyway, the dense model wins. A host with no GPU therefore gets a different and better
+answer than a naive "biggest that fits".
+
+Everything on the ladder except the last entry is Apache 2.0 or MIT, which matters for a deployment
+that ships to a client.
 
 Indicative cost per hunt, 60 calls at roughly 1,200 prompt and 400 output tokens:
 
-| Hardware | 8B Q4 | 14B Q4 |
-|---|---|---|
-| CPU only, 8 cores | 25 to 40 minutes | 60 to 100 minutes |
-| RTX 3060 12 GB | 3 to 5 minutes | 6 to 9 minutes |
-| RTX 4090 or A100 | under 2 minutes | 2 to 3 minutes |
+| Hardware | Dense 8B Q4 | Dense 14B Q4 | 30B A3B Q4 |
+|---|---|---|---|
+| CPU only, 8 cores | 25 to 40 minutes | 60 to 100 minutes | 20 to 35 minutes |
+| RTX 3060 12 GB | 3 to 5 minutes | 6 to 9 minutes | not resident, partial offload |
+| RTX 4090 or A100 | under 2 minutes | 2 to 3 minutes | 2 to 4 minutes |
 
 So **the AI layer never blocks the hunt**: the deterministic report is complete and viewable first,
 then AI observations arrive and the report updates. The nightly collector run is about 45 calls, which
@@ -314,10 +339,7 @@ is acceptable even on CPU because it runs at 02:00 with nobody waiting.
 
 All inference is local. No evidence and no client log leaves the tenant, which is the reason for
 choosing Ollama over a hosted API and should be stated in the report footer. The collector is the only
-component that touches the internet, and it only ever sends outbound requests for public articles,
-never client data.
-
----
+component that touches the internet, and only to fetch public articles, never to send anything.
 
 ## 6. Changes to the existing codebase
 
@@ -458,9 +480,9 @@ installed.
 
 | Phase | Content | Value on its own |
 |---|---|---|
-| 0 | `app/ai/client.py`, config, feature flag, `/api/ai/status`, `FakeOllama` harness | Infrastructure |
+| 0 | Model ladder, hardware detection, Ollama client, `/api/ai/status`, status indicator. **Done** | The operator can see what the host can run and what to pull |
 | 1 | Agent 2 stage A: entity profiler, peer outliers, sequence surprise, anomaly observations | Observations beyond fixed rules, with no model at all |
-| 2 | Generated hypotheses in the data model and the catalogue, tenant aware, with the UI | The structure agent 1 writes into |
+| 2 | Generated hypotheses in the data model and the catalogue, shared across tenants, with the review queue UI | The structure agent 1 writes into |
 | 3 | Agent 1: feeds, fetch, relevance filter, extraction, grounding, dedupe, daily schedule | The collector as requested |
 | 4 | Agent 2 stage B: adjudication, narration, guards, report AI section | The analyst agent as requested |
 | 5 | Learned parsers for unknown formats | Real coverage of arbitrary log types |
@@ -481,8 +503,9 @@ before phase 3 because the collector needs somewhere to write.
   similarity merge and the visible source link are what keep the catalogue usable, and an analyst must
   be able to reject in one click.
 * CPU only inference changes the user experience for hunts. The nightly collector is unaffected.
-* Making the catalogue tenant aware and database backed touches the catalogue, the API and the
-  interface. It is the largest single change here.
+* Making the catalogue database backed touches the catalogue, the API and the interface. It is the
+  largest single change here, because `HYPOTHESES` is a module level constant of frozen dataclasses
+  today.
 * Stage A needs population. A minimum entity and event count per peer group is required before outlier
   scoring runs at all, or small corpora will produce noise.
 * Model licences differ. Qwen 2.5 and Llama 3.1 both carry conditions a consulting deployment should
@@ -490,12 +513,40 @@ before phase 3 because the collector needs somewhere to write.
 
 ---
 
-## 11. Decisions needed before implementation
+## 11. Decisions taken
 
-1. Default model: `qwen2.5:14b` as proposed, or `llama3.1:8b` to guarantee it runs on any laptop.
-2. Are generated hypotheses shared across all tenants, or collected per tenant? Shared is far cheaper
-   in model time, since the collector runs once rather than once per client.
-3. Does the deployment have outbound internet for the collector, or does it need an offline mode where
-   articles are dropped into a watched folder instead?
-4. The daily cap on new hypotheses: 10 as proposed, or higher.
-5. Auto publication as proposed, or every generated hypothesis waits in the review queue.
+| Question | Decision |
+|---|---|
+| Which model | The best one the host can actually run. The platform ships a ranked ladder and selects at startup from detected memory and whether a GPU is present, with `THF_AI_MODEL` to override. See section 5 |
+| Scope of generated hypotheses | Shared across all tenants. The collector runs once for the platform, not once per client, and no client data is involved in collection so there is nothing to isolate |
+| Internet access | Available. No offline intake mode is needed for the first version |
+| Cadence | Feeds are polled daily so nothing rotates out, and candidates are published in one weekly batch. See below |
+| Publication | Nothing is published automatically. Every generated hypothesis waits in the review queue until an analyst accepts it |
+
+### On the cadence
+
+Fetching and reviewing are separated, because they want different rhythms. Feeds are polled **every
+day** at 02:00, since an RSS feed only carries recent items and a weekly poll would silently miss
+anything that scrolled off. Candidates then accumulate and are presented as **one weekly batch**, on
+Monday at 08:00 by default, so a reviewer deals with one queue of perhaps 15 to 40 candidates once a
+week instead of a trickle every morning. Both are configurable, `THF_CTI_FETCH_CRON` and
+`THF_CTI_REVIEW_CADENCE`, and either can be set to the same period if the weekly batch turns out to be
+the wrong shape in practice.
+
+### On the review queue
+
+Since nothing publishes itself, the validators stop being a publication gate and become a **quality
+label on the queue entry**. A candidate that passed every check is marked ready and can be accepted in
+one click, or in bulk. A candidate that failed one shows which one and why, so the reviewer knows
+whether to fix it or discard it. Each entry shows the statement, the technique, the tactic, the data
+sources, the source link and the quoted passage that produced it, which is everything needed to decide
+in a few seconds.
+
+---
+
+## 12. Status
+
+Phase 0 is implemented: `app/ai/` with the model ladder, hardware detection, the Ollama client,
+`GET /api/ai/status` and the status indicator in the interface. Nothing else in the application
+depends on it, which is asserted by a test that parses the engine package and fails if it ever imports
+the AI layer.

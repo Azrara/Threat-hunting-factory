@@ -25,6 +25,13 @@ class TestHealth:
         assert payload["status"] == "ok"
         assert payload["engine"]["total"] >= 100
 
+    def test_the_hypothesis_count_is_served_rather_than_hard_coded(self, client):
+        """The sign in page shows this number, so a stale constant is a visible lie."""
+        from app.engine.catalog import HYPOTHESES
+
+        payload = client.get("/api/health").json()
+        assert payload["hypotheses"] == len(HYPOTHESES)
+
     def test_the_interface_is_served(self, client):
         response = client.get("/")
         assert response.status_code == 200
