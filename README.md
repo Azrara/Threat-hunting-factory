@@ -290,6 +290,13 @@ deployment running several workers needs a shared store to be effective. The pla
 transport security and expects to sit behind a terminating proxy. Uploaded evidence is stored
 unencrypted on disk under the data directory.
 
+## Roadmap
+
+[Two local AI agents](docs/ai-agents-design.md) are designed but not implemented: an agent that reads
+CTI reporting and drafts hunting hypotheses, and an agent that finds suspicious behaviour beyond the
+fixed rule library. Both run on open source models served locally by Ollama, so no evidence leaves the
+tenant, and both are optional: the platform works unchanged with no model server installed.
+
 ## Limitations
 
 Findings are derived only from the evidence supplied. The absence of an observation is not proof that
