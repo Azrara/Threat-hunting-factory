@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..config import settings
+from .behaviour import BehaviourCandidate, analyse_behaviour
 from .catalog import DATA_SOURCES, Hypothesis
 from .executor import DetectionEngine, HuntContext
 from .ingest import collect_log_files, extract_archive, read_lines, sample_lines
@@ -70,6 +71,8 @@ class HuntOutcome:
     risk_score: float = 0.0
     verdict: str = "No significant findings"
     timespan: dict = field(default_factory=dict)
+    # Kept rather than discarded: these are what a model would later adjudicate.
+    behaviour_candidates: list[BehaviourCandidate] = field(default_factory=list)
 
     def summary(self) -> dict:
         severities = Counter(finding.severity for finding in self.findings)
@@ -239,6 +242,36 @@ def score_hunt(findings: list[Finding]) -> tuple[float, str]:
     return normalised, verdict
 
 
+def _profile_behaviour(
+    context: HuntContext,
+    outcome: HuntOutcome,
+    progress: ProgressCallback | None,
+) -> list[Finding]:
+    """Report entities that do not behave like their peers.
+
+    This runs after the rules and is independent of them: it finds activity no rule
+    describes. It is bounded and can be switched off, because it costs roughly a
+    third of the rule engine's time on the same evidence.
+    """
+    if not settings.behaviour_enabled:
+        return []
+    if len(context.events) > settings.behaviour_max_events:
+        outcome.warnings.append(
+            f"Behavioural profiling skipped: {len(context.events):,} events exceed the "
+            f"limit of {settings.behaviour_max_events:,}"
+        )
+        return []
+    if progress:
+        progress(0.88, "Profiling entity behaviour")
+    try:
+        findings, candidates = analyse_behaviour(context.events)
+    except Exception as error:  # profiling must never lose a completed rule run
+        outcome.warnings.append(f"Behavioural profiling stopped early ({type(error).__name__})")
+        return []
+    outcome.behaviour_candidates = candidates
+    return findings
+
+
 def run_hunt(
     archive_path: Path,
     workdir: Path,
@@ -255,6 +288,7 @@ def run_hunt(
             progress(0.45, "Evaluating detection rules")
         engine = DetectionEngine(rules, max_findings_per_rule=settings.max_observations_per_rule)
         outcome.findings = engine.run(context, progress)
+        outcome.findings.extend(_profile_behaviour(context, outcome, progress))
     if progress:
         progress(0.92, "Scoring observations")
     outcome.coverage = evaluate_coverage(hypothesis, outcome.data_sources)

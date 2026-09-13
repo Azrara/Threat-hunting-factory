@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1524%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1584%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1524 | 0 | 0 |
-| 3.12 | 1524 | 0 | 0 |
-| 3.13 | 1524 | 0 | 0 |
+| 3.11 | 1584 | 0 | 0 |
+| 3.12 | 1584 | 0 | 0 |
+| 3.13 | 1584 | 0 | 0 |
 
 ## Quick start
 
@@ -293,19 +293,35 @@ unencrypted on disk under the data directory.
 ## Roadmap
 
 [Two local AI agents](docs/ai-agents-design.md) are being built on open source models served locally
-by Ollama, so no evidence ever leaves the tenant: a collector that polls CTI reporting and research
-papers on its own and turns them into hypotheses with their technique, tactic, required data and
-source link, and an analyst agent that finds suspicious behaviour beyond the fixed rule library.
+by Ollama, so no evidence ever leaves the tenant: a collector that runs once a week, fetches CTI
+reporting and research papers on its own and turns them into hypotheses with their technique, tactic,
+required data and source link, and an analyst agent that finds suspicious behaviour beyond the fixed
+rule library.
 
-The foundation is in place. The platform detects what the host can run, picks the best model from a
-ranked ladder, and reports it at `GET /api/ai/status` and in the header. Everything else is designed
-and not yet implemented. The whole layer is optional at every step: with no model server installed the
-platform behaves exactly as it does today.
+Two pieces are in place.
+
+**Model selection.** The platform detects what the host can run, picks the best entry from a ranked
+ladder, and reports it at `GET /api/ai/status` and in the header. The ladder is ordered differently
+for CPU and GPU, because a mixture of experts model activates a fraction of its parameters per token
+and so beats a dense model of the same size on a processor while losing to it on a card.
+
+**Behavioural profiling, with no model at all.** Every hunt now also profiles each host, account,
+process, address, destination and client, compares each entity only against entities of the same kind
+using median absolute deviation, and reports the ones that stand apart on several independent families
+of measurement at once. A first order Markov model over each entity's own sequence of actions scores
+how improbable its order of operations is, which catches the right events in the wrong order. These
+observations carry the same description, original log extract, risk, impact and recommendation as
+every other one, marked `behavioural` so a reader can tell them apart from rule matches.
+
+The rest is designed and not yet implemented. The whole layer is optional at every step: with no model
+server installed the platform behaves exactly as it does today.
 
 ```
-THF_AI_MODEL      override the automatic model choice
-THF_OLLAMA_URL    the model server, default http://127.0.0.1:11434
-THF_AI_ENABLED    set to 0 to switch the layer off entirely
+THF_AI_MODEL              override the automatic model choice
+THF_OLLAMA_URL            the model server, default http://127.0.0.1:11434
+THF_AI_ENABLED            set to 0 to switch the model layer off entirely
+THF_BEHAVIOUR             set to 0 to switch behavioural profiling off
+THF_BEHAVIOUR_MAX_EVENTS  corpus size above which profiling is skipped
 ```
 
 ## Limitations

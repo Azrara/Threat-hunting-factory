@@ -42,6 +42,12 @@ class Settings:
         self.max_observations_per_rule: int = int(
             os.environ.get("THF_MAX_OBS_PER_RULE", "50")
         )
+        # Behavioural profiling costs roughly a third of the rule engine's time on
+        # the same corpus, so it is bounded and can be switched off outright.
+        self.behaviour_enabled: bool = os.environ.get("THF_BEHAVIOUR", "1") != "0"
+        self.behaviour_max_events: int = int(
+            os.environ.get("THF_BEHAVIOUR_MAX_EVENTS", "500000")
+        )
         self.seed_demo_data: bool = os.environ.get("THF_SEED_DEMO", "1") == "1"
 
     def _local_secret(self) -> str:
