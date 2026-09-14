@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import SessionLocal
+from . import hypotheses as hypothesis_service
 from .engine.catalog import get_hypothesis
 from .engine.runner import HuntOutcome, run_hunt
 from .models import Hunt, Observation, utcnow
@@ -54,6 +55,7 @@ def execute(db: Session, hunt_id: str) -> Hunt:
     hunt = db.get(Hunt, hunt_id)
     if hunt is None:
         raise ValueError(f"Unknown hunt {hunt_id}")
+    hypothesis_service.refresh(db)
     hypothesis = get_hypothesis(hunt.hypothesis_id)
     if hypothesis is None:
         hunt.status = "failed"

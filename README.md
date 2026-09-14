@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1584%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1651%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1584 | 0 | 0 |
-| 3.12 | 1584 | 0 | 0 |
-| 3.13 | 1584 | 0 | 0 |
+| 3.11 | 1651 | 0 | 0 |
+| 3.12 | 1651 | 0 | 0 |
+| 3.13 | 1651 | 0 | 0 |
 
 ## Quick start
 
@@ -312,6 +312,15 @@ of measurement at once. A first order Markov model over each entity's own sequen
 how improbable its order of operations is, which catches the right events in the wrong order. These
 observations carry the same description, original log extract, risk, impact and recommendation as
 every other one, marked `behavioural` so a reader can tell them apart from rule matches.
+
+**The hypothesis catalogue is no longer fixed.** Hypotheses derived from public reporting are stored,
+validated against the MITRE ATT&CK catalogue that ships with the repository, and held in a review
+queue until an analyst accepts them. The technique must be real, the telemetry must be something the
+engine can ingest, the article must be linked and a passage from it must support the statement.
+The tactic is read from ATT&CK, the detections are selected by matching the technique against the rule
+library, and a technique no rule covers is published as a named detection gap that runs behavioural
+profiling alone. Published hypotheses are shared by every workspace, since they come from public
+reporting and never from client evidence.
 
 The rest is designed and not yet implemented. The whole layer is optional at every step: with no model
 server installed the platform behaves exactly as it does today.

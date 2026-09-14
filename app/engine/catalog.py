@@ -9,6 +9,7 @@ Three families are offered:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 
 from .rules import RULES_BY_ID, rules_for
@@ -1380,7 +1381,35 @@ HYPOTHESES: tuple[Hypothesis, ...] = (
     ),
 )
 
+# The registry the rest of the platform reads. It starts as the built in catalogue
+# and gains the hypotheses that an analyst has published from the review queue. The
+# engine never touches the database: the application layer loads those rows and
+# registers them here, so nothing in ``app/engine`` depends on storage.
 HYPOTHESES_BY_ID: dict[str, Hypothesis] = {item.id: item for item in HYPOTHESES}
+BUILTIN_IDS: frozenset[str] = frozenset(HYPOTHESES_BY_ID)
+
+
+def register_generated(items: "Iterable[Hypothesis]") -> None:
+    """Replace the generated part of the registry with ``items``."""
+    for key in [key for key in HYPOTHESES_BY_ID if key not in BUILTIN_IDS]:
+        del HYPOTHESES_BY_ID[key]
+    for item in items:
+        if item.id in BUILTIN_IDS:
+            continue  # a generated hypothesis may never shadow a built in one
+        HYPOTHESES_BY_ID[item.id] = item
+
+
+def clear_generated() -> None:
+    register_generated(())
+
+
+def generated_ids() -> set[str]:
+    return {key for key in HYPOTHESES_BY_ID if key not in BUILTIN_IDS}
+
+
+def all_hypotheses() -> tuple[Hypothesis, ...]:
+    """Every hypothesis on offer: the built in catalogue plus what was published."""
+    return tuple(HYPOTHESES_BY_ID.values())
 
 FAMILY_LABELS = {
     "cti": "Threat intelligence scenario",
@@ -1390,7 +1419,10 @@ FAMILY_LABELS = {
 
 
 def catalogue() -> list[dict]:
-    return [item.to_dict() for item in HYPOTHESES]
+    return [
+        {**item.to_dict(), "origin": "builtin" if item.id in BUILTIN_IDS else "generated"}
+        for item in all_hypotheses()
+    ]
 
 
 def get_hypothesis(hypothesis_id: str) -> Hypothesis | None:
@@ -1400,9 +1432,15 @@ def get_hypothesis(hypothesis_id: str) -> Hypothesis | None:
 def validate_catalogue() -> list[str]:
     """Return a list of problems, used by the test suite and at start up."""
     problems: list[str] = []
-    for item in HYPOTHESES:
+    for item in all_hypotheses():
+        builtin = item.id in BUILTIN_IDS
+        # A generated hypothesis is allowed to have no rules. That is a detection
+        # gap, which is a finding about the library rather than a fault in the
+        # hypothesis. A built in one with no rules is a mistake.
         if not item.rule_selectors:
-            problems.append(f"{item.id}: no rules selected")
+            if builtin:
+                problems.append(f"{item.id}: no rules selected")
+            continue
         resolved = item.rules()
         if not resolved:
             problems.append(f"{item.id}: rule selectors resolved to nothing")

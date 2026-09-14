@@ -8,6 +8,7 @@ import { renderHypotheses } from "./views/hypotheses.js";
 import { renderNewHunt } from "./views/newhunt.js";
 import { renderHunts } from "./views/hunts.js";
 import { renderReport } from "./views/report.js";
+import { renderReview } from "./views/review.js";
 import { renderRules } from "./views/rules.js";
 import { renderAdmin } from "./views/admin.js";
 
@@ -22,6 +23,8 @@ const NAV = [
     eyebrow: "History", subtitle: "Every analysis executed in this workspace" },
   { hash: "#/rules", label: "Detection library", icon: "shield", title: "Detection library",
     eyebrow: "Engine", subtitle: "The rules and statistical models behind every hunt" },
+  { hash: "#/review", label: "Review queue", icon: "target", title: "Hypothesis review queue",
+    eyebrow: "Threat intel", subtitle: "Hypotheses derived from public reporting, waiting to be accepted" },
   { hash: "#/admin", label: "Workspace", icon: "users", title: "Workspace settings",
     eyebrow: "Administration", subtitle: "Members, roles and activity log" },
 ];
@@ -172,6 +175,7 @@ async function render() {
     else if (head === "hunts") await renderHunts(content, navigate);
     else if (head === "report" && second) await renderReport(content, navigate, second);
     else if (head === "rules") await renderRules(content);
+    else if (head === "review") await renderReview(content);
     else if (head === "admin") await renderAdmin(content);
     else await renderDashboard(content, navigate);
   } catch (error) {

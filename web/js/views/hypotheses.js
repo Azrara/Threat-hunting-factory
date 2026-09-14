@@ -18,6 +18,7 @@ export async function renderHypotheses(root, navigate) {
   }
 
   let family = "all";
+  let origin = "all";
   let search = "";
   const grid = el("div", { class: "hyp-grid" });
 
@@ -36,6 +37,17 @@ export async function renderHypotheses(root, navigate) {
       })
     ),
     el("div", { class: "spacer" }),
+    el("select", {
+      class: "input", style: "max-width:190px",
+      onchange: (event) => {
+        origin = event.target.value;
+        draw();
+      },
+    }, [
+      el("option", { value: "all", text: "Every origin" }),
+      el("option", { value: "builtin", text: "Built in" }),
+      el("option", { value: "generated", text: "From reporting" }),
+    ]),
     el("input", {
       class: "input", type: "search", placeholder: "Search actors, tactics or keywords",
       style: "max-width:300px",
@@ -52,6 +64,7 @@ export async function renderHypotheses(root, navigate) {
 
   function matches(item) {
     if (family !== "all" && item.family !== family) return false;
+    if (origin !== "all" && (item.origin || "builtin") !== origin) return false;
     if (!search) return true;
     const haystack = [
       item.name, item.summary, item.narrative, item.rationale,
@@ -76,10 +89,16 @@ export async function renderHypotheses(root, navigate) {
         el("span", { class: "tag", text: FAMILY_TAGS[item.family] || item.family }),
         el("span", { class: `tag ${item.priority === "critical" ? "tag-dark" : ""}`, text: item.priority }),
       ]),
+      item.origin === "generated"
+        ? el("span", { class: "tag tag-green mb-1", text: "From reporting" })
+        : null,
       el("h3", { text: item.name }),
       el("p", { text: item.summary }),
       el("div", { class: "hyp-meta" }, [
-        el("span", { class: "tag tag-green", text: `${item.rule_count} detections` }),
+        el("span", {
+          class: `tag ${item.rule_count ? "tag-green" : ""}`,
+          text: item.rule_count ? `${item.rule_count} detections` : "No detection yet",
+        }),
         el("span", { class: "tag", text: `${item.techniques.length} techniques` }),
         ...(item.required_data_sources.length
           ? [el("span", { class: "tag", text: `${item.required_data_sources.length} required source${item.required_data_sources.length > 1 ? "s" : ""}` })]
@@ -121,6 +140,32 @@ export async function renderHypotheses(root, navigate) {
     body.appendChild(el("p", { text: detail.rationale }));
     body.appendChild(el("div", { class: "section-label", text: "Analytical method" }));
     body.appendChild(el("p", { text: detail.method }));
+
+    if (detail.source) {
+      body.appendChild(el("div", { class: "section-label", text: "Where this came from" }));
+      const source = el("div", { class: "source-card" }, [
+        detail.source.title ? el("strong", { text: detail.source.title }) : null,
+        detail.source.quote
+          ? el("blockquote", { class: "source-quote", text: detail.source.quote })
+          : null,
+        detail.source.url
+          ? el("a", {
+              class: "text-sm", href: detail.source.url, target: "_blank", rel: "noopener noreferrer",
+              text: detail.source.url,
+            })
+          : null,
+        el("div", {
+          class: "muted text-sm mt-1",
+          text: `Collected ${(detail.source.collected_at || "").slice(0, 10)}`,
+        }),
+      ]);
+      body.appendChild(source);
+    }
+    if (detail.detection_gap) {
+      body.appendChild(el("div", { class: "notice notice-warn" },
+        "No rule in the library covers this technique yet. A hunt on this hypothesis relies on " +
+        "behavioural profiling alone, and the gap is worth closing."));
+    }
 
     if (detail.threat_actors.length) {
       body.appendChild(el("div", { class: "section-label", text: "Associated threat actors" }));

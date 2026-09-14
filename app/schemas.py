@@ -91,3 +91,38 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: dict[str, Any]
     tenant: dict[str, Any]
+
+
+class CandidateIn(BaseModel):
+    """A proposed hypothesis. Only the statement and the technique are free text."""
+
+    statement: str = Field(min_length=1, max_length=1000)
+    technique_id: str = Field(min_length=1, max_length=32)
+    data_sources: list[str] = Field(default_factory=list, max_length=12)
+    source_url: str = Field(default="", max_length=1000)
+    source_title: str = Field(default="", max_length=400)
+    source_quote: str = Field(default="", max_length=4000)
+    threat_actors: list[str] = Field(default_factory=list, max_length=8)
+    confidence: str = Field(default="medium", pattern="^(high|medium|low)$")
+    model_name: str = Field(default="", max_length=120)
+    prompt_version: str = Field(default="", max_length=32)
+
+    def to_candidate(self):
+        from .hypotheses import Candidate
+
+        return Candidate(
+            statement=self.statement,
+            technique_id=self.technique_id,
+            data_sources=tuple(self.data_sources),
+            source_url=self.source_url,
+            source_title=self.source_title,
+            source_quote=self.source_quote,
+            threat_actors=tuple(self.threat_actors),
+            confidence=self.confidence,
+            model_name=self.model_name,
+            prompt_version=self.prompt_version,
+        )
+
+
+class ReviewIn(BaseModel):
+    note: str = Field(default="", max_length=2000)

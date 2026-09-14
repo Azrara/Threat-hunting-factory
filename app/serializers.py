@@ -111,3 +111,49 @@ def observation_payload(observation: Observation) -> dict[str, Any]:
         "last_seen": _iso(observation.last_seen),
         "created_at": _iso(observation.created_at),
     }
+
+
+def generated_hypothesis_payload(row) -> dict:
+    """One entry of the review queue, with everything a reviewer needs to decide."""
+    from .engine.catalog import DATA_SOURCES
+    from .engine.rules import RULES_BY_ID
+
+    return {
+        "id": row.id,
+        "hypothesis_id": row.hypothesis_id,
+        "name": row.name,
+        "statement": row.statement,
+        "family": row.family,
+        "priority": row.priority,
+        "mitre_technique_id": row.mitre_technique_id,
+        "mitre_technique": row.mitre_technique,
+        "mitre_tactic": row.mitre_tactic,
+        "attack_url": (
+            f"https://attack.mitre.org/techniques/{row.mitre_technique_id.replace('.', '/')}/"
+            if row.mitre_technique_id else ""
+        ),
+        "required_data_sources": [
+            {
+                "id": source,
+                "name": DATA_SOURCES[source].name if source in DATA_SOURCES else source,
+            }
+            for source in (row.required_data_sources or [])
+        ],
+        "rule_selectors": list(row.rule_selectors or []),
+        "rule_count": len([r for r in (row.rule_selectors or []) if r in RULES_BY_ID]),
+        "detection_gap": not (row.rule_selectors or []),
+        "threat_actors": list(row.threat_actors or []),
+        "source_url": row.source_url,
+        "source_title": row.source_title,
+        "source_quote": row.source_quote,
+        "source_published_at": row.source_published_at.isoformat() if row.source_published_at else None,
+        "status": row.status,
+        "quality": row.quality,
+        "gate_failures": list(row.gate_failures or []),
+        "confidence": row.confidence,
+        "model_name": row.model_name,
+        "reviewed_by": row.reviewed_by,
+        "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
+        "review_note": row.review_note,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }

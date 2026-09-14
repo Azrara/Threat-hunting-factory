@@ -11,8 +11,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from . import hypotheses as hypothesis_service
+from .attack import version as attack_version
 from .database import SessionLocal, init_db
-from .engine.catalog import HYPOTHESES, validate_catalogue
+from .engine import catalog as catalog_registry
+from .engine.catalog import validate_catalogue
 from .engine.rules import statistics as rule_statistics
 from .routers import admin, ai, auth, catalog, hunts, reports, stats
 from .seed import seed_demo
@@ -27,12 +30,15 @@ async def lifespan(app: FastAPI):
     problems = validate_catalogue()
     if problems:
         logger.warning("Hypothesis catalogue problems: %s", problems)
-    if settings.seed_demo_data:
-        db = SessionLocal()
-        try:
+    db = SessionLocal()
+    try:
+        # Published hypotheses live in the database. Loading them here means the
+        # catalogue is complete before the first request rather than after it.
+        hypothesis_service.refresh(db, force=True)
+        if settings.seed_demo_data:
             seed_demo(db)
-        finally:
-            db.close()
+    finally:
+        db.close()
     logger.info("Detection library loaded: %s", rule_statistics())
     yield
 
@@ -75,7 +81,8 @@ def health() -> dict:
         "application": settings.app_name,
         "version": settings.app_version,
         "engine": rule_statistics(),
-        "hypotheses": len(HYPOTHESES),
+        "hypotheses": len(catalog_registry.all_hypotheses()),
+        "attack_version": attack_version(),
     }
 
 

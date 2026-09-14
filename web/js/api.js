@@ -83,6 +83,11 @@ export const api = {
   hypotheses: (params = {}) => request(`/api/hypotheses?${new URLSearchParams(params)}`),
   hypothesis: (id) => request(`/api/hypotheses/${encodeURIComponent(id)}`),
   dataSources: () => request("/api/data-sources"),
+  reviewQueue: (status = "review") => request(`/api/hypotheses/review?status=${encodeURIComponent(status)}`),
+  publishCandidate: (id, note = "") =>
+    request(`/api/hypotheses/review/${encodeURIComponent(id)}/publish`, { method: "POST", json: { note } }),
+  rejectCandidate: (id, note = "") =>
+    request(`/api/hypotheses/review/${encodeURIComponent(id)}/reject`, { method: "POST", json: { note } }),
   rules: () => request("/api/rules"),
 
   hunts: (params = {}) => request(`/api/hunts?${new URLSearchParams(params)}`),

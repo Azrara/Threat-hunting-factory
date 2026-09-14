@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user, require_analyst
+from .. import hypotheses as hypothesis_service
 from ..engine.catalog import get_hypothesis
 from ..hunt_service import schedule
 from ..models import AuditLog, Hunt, Observation, User, new_id
@@ -63,6 +64,7 @@ async def create_hunt(
     db: Session = Depends(get_db),
 ) -> dict:
     """Accept an evidence archive and queue the analysis."""
+    hypothesis_service.refresh(db)
     hypothesis = get_hypothesis(hypothesis_id)
     if hypothesis is None:
         raise HTTPException(status_code=400, detail="Unknown hypothesis")

@@ -492,8 +492,8 @@ installed.
 | Phase | Content | Value on its own |
 |---|---|---|
 | 0 | Model ladder, hardware detection, Ollama client, `/api/ai/status`, status indicator. **Done** | The operator can see what the host can run and what to pull |
-| 1 | Agent 2 stage A: entity profiler, peer outliers, sequence surprise, anomaly observations | Observations beyond fixed rules, with no model at all |
-| 2 | Generated hypotheses in the data model and the catalogue, shared across tenants, with the review queue UI | The structure agent 1 writes into |
+| 1 | Agent 2 stage A: entity profiler, peer outliers, sequence surprise, anomaly observations. **Done** | Observations beyond fixed rules, with no model at all |
+| 2 | Generated hypotheses in the data model and the catalogue, shared across tenants, with the review queue UI. **Done** | The structure agent 1 writes into |
 | 3 | Agent 1: feeds, fetch, relevance filter, extraction, grounding, dedupe, weekly schedule | The collector as requested |
 | 4 | Agent 2 stage B: adjudication, narration, guards, report AI section | The analyst agent as requested |
 | 5 | Learned parsers for unknown formats | Real coverage of arbitrary log types |
@@ -578,4 +578,34 @@ showed the alternative was wrong:
 4. **An outlier must stand clear of its peers.** Seven distinct accounts against a median of six is a
    z score of nine and a difference of one.
 
-Next: phase 2, generated hypotheses in the data model and the catalogue.
+**Phase 2, done.** The structure agent 1 writes into.
+
+* `app/attack_reference.json`, the ATT&CK 19.2 catalogue reduced from the 50 MB STIX bundle to 100 KB,
+  rebuilt with `tools/build_attack_reference.py`. 697 techniques, and the 149 retired identifiers with
+  what replaced each one, so an out of date reference resolves instead of being rejected as an
+  invention.
+* `app/hypotheses.py`, the quality gate. A candidate is checked for a real technique, telemetry the
+  platform can ingest, a source link, a supporting passage, a statement that is one sentence, and it is
+  compared against what the catalogue already covers. Only the statement and the technique come from
+  the proposer: the tactic is read from ATT&CK, the detections are selected by matching the technique
+  against the rule library, and the priority follows the severity of those detections.
+* `GeneratedHypothesis`, shared across tenants rather than scoped to one, because these come from
+  public reporting and never from client evidence.
+* The review queue at `GET /api/hypotheses/review` with publish and reject, and its page in the
+  interface. Nothing publishes itself. A candidate that passed every check is marked ready and
+  published in one click; one that failed shows which check and why, and the publish button is refused.
+* The catalogue is now the built in 33 plus whatever has been published, resolved through a registry
+  that the application layer fills from the database. The engine still imports no storage.
+
+**A detection gap runs no rule.** A published hypothesis whose technique no rule covers relies on the
+behavioural profiler alone. The first version fell back to the whole statistical library, which turned
+a hypothesis about bootkits into forty six observations about beaconing and entropy. Naming the gap is
+the useful output, not filling the report.
+
+**What this surfaced about the rule library.** Five identifiers it uses were retired in ATT&CK 19:
+T1070.001, T1562.001, T1562.006, T1562.008 and T1574.002, now T1685.005, T1685, T1685, T1685.002 and
+T1574.001. Following revocations means those rules still match hypotheses that name the current
+identifier, so nothing is broken, but a report still prints the retired identifier. Migrating the
+library is a separate change, deliberately not folded into this one.
+
+Next: phase 3, the collector itself.

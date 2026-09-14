@@ -257,6 +257,31 @@ p { margin: 0 0 12px; line-height: 1.6; }
 }
 .tag-green { background: var(--green-soft); color: #4a6b12; border-color: #cfe6a8; }
 
+.source-card {
+  border: 1px solid var(--line-soft); border-left: 3px solid var(--green);
+  border-radius: var(--radius); padding: 14px 16px; background: var(--mist);
+  display: grid; gap: 8px; word-break: break-word;
+}
+.source-quote {
+  margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--line);
+  color: var(--slate); font-size: 13px; line-height: 1.6; font-style: italic;
+}
+.notice {
+  border-radius: var(--radius); padding: 12px 14px; font-size: 13px; line-height: 1.6;
+  border: 1px solid var(--line-soft); background: var(--mist); color: var(--slate);
+  margin-top: 12px;
+}
+.notice-warn { border-color: #f2d6a2; background: #fdf6e8; color: #7a5410; }
+
+.queue-card {
+  border: 1px solid var(--line-soft); border-radius: var(--radius);
+  background: var(--panel); padding: 18px 20px; display: grid; gap: 10px;
+}
+.queue-card.needs-attention { border-left: 3px solid var(--medium); }
+.queue-card.ready { border-left: 3px solid var(--green); }
+.queue-grid { display: grid; gap: 16px; }
+.queue-gates { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #7a5410; font-size: 13px; }
+
 .ai-chip { cursor: default; max-width: 190px; }
 .ai-chip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }

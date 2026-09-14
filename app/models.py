@@ -155,3 +155,55 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(80))
     detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class GeneratedHypothesis(Base):
+    """A hypothesis derived from public reporting, waiting for or past review.
+
+    These are deliberately not scoped to a tenant. They come from public threat
+    intelligence, never from client evidence, so there is nothing to isolate and
+    collecting them once for the platform costs a fraction of collecting them once
+    per client.
+    """
+
+    __tablename__ = "generated_hypotheses"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    # The identifier the rest of the platform uses, stable across republishing.
+    hypothesis_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+
+    name: Mapped[str] = mapped_column(String(200))
+    statement: Mapped[str] = mapped_column(Text)
+    family: Mapped[str] = mapped_column(String(32), default="technique")
+    priority: Mapped[str] = mapped_column(String(16), default="medium")
+
+    mitre_technique_id: Mapped[str] = mapped_column(String(32), index=True, default="")
+    mitre_technique: Mapped[str] = mapped_column(String(160), default="")
+    mitre_tactic: Mapped[str] = mapped_column(String(80), default="")
+
+    required_data_sources: Mapped[list] = mapped_column(JSON, default=list)
+    optional_data_sources: Mapped[list] = mapped_column(JSON, default=list)
+    rule_selectors: Mapped[list] = mapped_column(JSON, default=list)
+    threat_actors: Mapped[list] = mapped_column(JSON, default=list)
+
+    source_url: Mapped[str] = mapped_column(String(1000), default="")
+    source_title: Mapped[str] = mapped_column(String(400), default="")
+    source_quote: Mapped[str] = mapped_column(Text, default="")
+    source_published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # review, published, rejected
+    status: Mapped[str] = mapped_column(String(16), default="review", index=True)
+    # ready when every gate passed, needs_attention otherwise
+    quality: Mapped[str] = mapped_column(String(24), default="ready", index=True)
+    gate_failures: Mapped[list] = mapped_column(JSON, default=list)
+    confidence: Mapped[str] = mapped_column(String(16), default="medium")
+
+    model_name: Mapped[str] = mapped_column(String(120), default="")
+    prompt_version: Mapped[str] = mapped_column(String(32), default="")
+    collector_run_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+
+    reviewed_by: Mapped[str] = mapped_column(String(32), default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    review_note: Mapped[str] = mapped_column(Text, default="")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
