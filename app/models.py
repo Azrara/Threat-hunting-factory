@@ -94,6 +94,13 @@ class Hunt(Base):
     summary: Mapped[dict] = mapped_column(JSON, default=dict)
     coverage: Mapped[dict] = mapped_column(JSON, default=dict)
 
+    # The model stage runs after the hunt is already complete and readable.
+    # unavailable, pending, running, completed, failed, skipped
+    ai_status: Mapped[str] = mapped_column(String(16), default="unavailable")
+    ai_detail: Mapped[str] = mapped_column(String(400), default="")
+    ai_observation_count: Mapped[int] = mapped_column(Integer, default=0)
+    ai_model: Mapped[str] = mapped_column(String(120), default="")
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -142,6 +149,18 @@ class Observation(Base):
     first_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    # Where the observation came from, so a reader can always tell what the engine
+    # proved from what a model suggested.
+    # rule: a detection rule matched
+    # anomaly: the behavioural profiler, deterministic and with no model
+    # ai: a local model adjudicated a behavioural candidate
+    origin: Mapped[str] = mapped_column(String(16), default="rule", index=True)
+    ai_confidence: Mapped[str] = mapped_column(String(16), default="")
+    ai_rationale: Mapped[str] = mapped_column(Text, default="")
+    benign_explanation: Mapped[str] = mapped_column(Text, default="")
+    model_name: Mapped[str] = mapped_column(String(120), default="")
+    prompt_version: Mapped[str] = mapped_column(String(40), default="")
 
     hunt: Mapped[Hunt] = relationship(back_populates="observations")
 

@@ -273,6 +273,9 @@ p { margin: 0 0 12px; line-height: 1.6; }
 }
 .notice-warn { border-color: #f2d6a2; background: #fdf6e8; color: #7a5410; }
 
+.dismissed-group { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.dismissed-group .obs { opacity: .82; }
+
 .collector-panel {
   border: 1px solid var(--line-soft); border-radius: var(--radius);
   background: var(--panel); padding: 18px 20px;

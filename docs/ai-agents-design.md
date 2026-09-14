@@ -495,7 +495,7 @@ installed.
 | 1 | Agent 2 stage A: entity profiler, peer outliers, sequence surprise, anomaly observations. **Done** | Observations beyond fixed rules, with no model at all |
 | 2 | Generated hypotheses in the data model and the catalogue, shared across tenants, with the review queue UI. **Done** | The structure agent 1 writes into |
 | 3 | Agent 1: feeds, fetch, relevance filter, extraction, grounding, dedupe, weekly schedule. **Done** | The collector as requested |
-| 4 | Agent 2 stage B: adjudication, narration, guards, report AI section | The analyst agent as requested |
+| 4 | Agent 2 stage B: adjudication, narration, guards, report AI section. **Done** | The analyst agent as requested |
 | 5 | Learned parsers for unknown formats | Real coverage of arbitrary log types |
 | 6 | Attack story correlation and the PDF executive summary | Report quality |
 
@@ -644,4 +644,42 @@ candidate ceiling held between articles but not inside one, so an article propos
 could pass it. And the shipped source list reappeared on every run, which would have overwritten an
 operator who curates their own.
 
-Next: phase 4, the analyst agent's model stage.
+**Phase 4, done.** `app/ai/analyst.py`. A local model adjudicates the candidates the profiler found:
+suspicious, benign or inconclusive, with its reasoning, the attack hypothesis, the risk, the impact,
+the recommendation, and the most likely innocent explanation.
+
+The model is used for judgement and for writing, and for nothing that can be checked mechanically.
+Five guards decide what survives:
+
+1. **Evidence is cited, never written.** The model returns identifiers and the excerpt is copied from
+   the parsed corpus. An identifier that is not in the brief means the model invented a log line, and
+   the whole verdict goes with it.
+2. **Suspicious with no evidence is refused**, because a verdict nothing supports is an opinion.
+3. **A technique the ATT&CK table does not contain is discarded**, and the tactic is read from the
+   table rather than believed.
+4. **A model on its own never exceeds medium.** A deterministic detection that flagged the same
+   entity is what earns high, and critical is not reachable this way at all.
+5. **Text hygiene**: bounded lengths, control characters and direction marks removed, em dashes
+   replaced, and every assessment says in its own text that a model wrote it.
+
+Log content is attacker controlled, so it reaches the model as delimited data whose delimiters are
+stripped out of the text itself, never as instructions. A model that obeys an injected instruction
+completely still produces nothing, which is asserted rather than assumed.
+
+**The hunt is never delayed by it.** The deterministic report is persisted and readable first, then
+the model stage runs and updates the hunt as it goes. With no model server the hunt is unchanged and
+the report records why there was no assessment.
+
+**Dismissed verdicts are kept and do not raise the risk score.** Work the model did and cleared is a
+record of what was examined, shown in a collapsed group in the report. A hunt whose risk went up
+because twenty things were looked at and cleared would be lying.
+
+Three things testing changed. An adjudicated entity was reported twice, once by the profiler and once
+by the model, with the second copy saying strictly less, so the deterministic observation is now
+replaced when a verdict survives the guards and kept when one does not. The column migration broke on
+`references`, a reserved word, because identifiers were interpolated rather than quoted. And the
+origin filter in the report was never added at all: the edit matched nothing and failed silently,
+which the browser check caught and the test suite would not have.
+
+All four phases of the two agents as requested are now implemented. What remains is phase 5, learned
+parsers for unknown log formats, and phase 6, the attack story in the executive summary.

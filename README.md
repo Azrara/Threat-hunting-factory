@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1759%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1811%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1759 | 0 | 0 |
-| 3.12 | 1759 | 0 | 0 |
-| 3.13 | 1759 | 0 | 0 |
+| 3.11 | 1811 | 0 | 0 |
+| 3.12 | 1811 | 0 | 0 |
+| 3.13 | 1811 | 0 | 0 |
 
 ## Quick start
 
@@ -330,7 +330,17 @@ filter decides what is worth reading before any model is involved, which is what
 hundred calls rather than a few thousand. Run it on demand from the interface, or from
 `python -m app.ai.collector --once` under cron.
 
-The rest is designed and not yet implemented. The whole layer is optional at every step: with no model
+**A local model adjudicates what the profiler found.** After a hunt completes, and only after, each
+behavioural candidate goes to the model: suspicious, benign or inconclusive, with the reasoning, the
+risk, the impact, the recommendation and the most likely innocent explanation. The model cites
+evidence by identifier and the excerpt is copied from the parsed corpus, so it cannot produce a log
+line. A technique ATT&CK does not contain is discarded. A model on its own never exceeds medium
+severity, and critical is not reachable that way at all. Everything it writes is marked as written by
+a model, and what it examined and cleared is kept in the report as a record of work done rather than
+as a reason for the risk to rise.
+
+Two things are still designed and not implemented: learned parsers for formats the engine has never
+seen, and the attack story in the executive summary. The whole layer is optional at every step: with no model
 server installed the platform behaves exactly as it does today.
 
 ```
@@ -343,6 +353,7 @@ THF_CTI_ENABLED           set to 0 to switch the weekly collector off
 THF_CTI_DAY               weekday to collect on, 0 is Monday, default 6
 THF_CTI_HOUR              hour to collect at, UTC, default 2
 THF_CTI_MAX_CANDIDATES    hypotheses proposed per run, default 25
+THF_AI_MAX_CALLS          model calls per hunt for adjudication, default 60
 ```
 
 ## Limitations

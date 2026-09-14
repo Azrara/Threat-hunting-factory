@@ -103,6 +103,7 @@ export const api = {
     request(`/api/hunts/${encodeURIComponent(id)}/observations?${new URLSearchParams(params)}`),
   deleteHunt: (id) => request(`/api/hunts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   rerun: (id) => request(`/api/hunts/${encodeURIComponent(id)}/rerun`, { method: "POST" }),
+  rerunAi: (id) => request(`/api/hunts/${encodeURIComponent(id)}/ai-analysis`, { method: "POST" }),
   createHunt: (formData, onProgress) =>
     new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();

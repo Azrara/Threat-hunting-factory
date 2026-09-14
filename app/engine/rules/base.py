@@ -37,6 +37,9 @@ class Finding:
     confidence: str = "medium"
     category: str = ""
     detection_type: str = "pattern"
+    # Where this came from, so a reader can always separate what the engine proved
+    # from what a model suggested.  rule, anomaly or ai.
+    origin: str = "rule"
     risk: str = ""
     impact: str = ""
     recommendation: str = ""
@@ -53,6 +56,12 @@ class Finding:
     event_count: int = 1
     first_seen: float | None = None
     last_seen: float | None = None
+    # Set only on findings a model produced.
+    ai_confidence: str = ""
+    ai_rationale: str = ""
+    benign_explanation: str = ""
+    model_name: str = ""
+    prompt_version: str = ""
 
     @property
     def score(self) -> float:

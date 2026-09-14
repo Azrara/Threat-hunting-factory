@@ -223,6 +223,10 @@ def score_hunt(findings: list[Finding]) -> tuple[float, str]:
         return 0.0, "No significant findings"
     score = 0.0
     for finding in findings:
+        # Something a model examined and cleared is a record of work done, not a
+        # reason for the risk to go up.
+        if finding.origin == "ai" and finding.severity == "info":
+            continue
         weight = SEVERITY_WEIGHT.get(finding.severity, 5.0)
         confidence = {"high": 1.0, "medium": 0.8, "low": 0.55}.get(finding.confidence, 0.8)
         score += weight * confidence

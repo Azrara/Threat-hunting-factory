@@ -27,7 +27,12 @@ export async function renderReport(root, navigate, huntId) {
   const observations = payload.items;
   const summary = hunt.summary || {};
   const coverage = hunt.coverage || {};
-  const filters = { severity: "all", category: "all", search: "" };
+  const filters = { severity: "all", category: "all", origin: "all", search: "" };
+  const ORIGIN_LABELS = {
+    rule: "Detection rule",
+    anomaly: "Behavioural profile",
+    ai: "Model assessment",
+  };
 
   clear(root);
   root.appendChild(hero());
@@ -42,6 +47,7 @@ export async function renderReport(root, navigate, huntId) {
         el("h2", { text: `Observations (${observations.length})` }),
         el("div", { class: "muted text-sm mt-1",
           text: "Each observation carries the original evidence, the cyber risk, the impact and the recommendation." }),
+        aiLine(),
       ]),
       el("div", { class: "row" }, [
         el("button", { class: "btn btn-ghost btn-sm", onclick: () => toggleAll(true) }, "Expand all"),
@@ -53,6 +59,39 @@ export async function renderReport(root, navigate, huntId) {
   fill();
 
   // ---------------------------------------------------------------- pieces
+
+  function aiLine() {
+    const state = hunt.ai_status || "unavailable";
+    const wrapper = el("div", { class: "row wrap mt-1" });
+    const messages = {
+      completed: `Model assessment: ${hunt.ai_detail || "done"}.`,
+      running: "A local model is adjudicating the behavioural candidates now.",
+      pending: "Model assessment queued.",
+      failed: `Model assessment failed: ${hunt.ai_detail || "unknown reason"}.`,
+      skipped: `No model assessment: ${hunt.ai_detail || "nothing to adjudicate"}.`,
+      unavailable: `No model assessment: ${hunt.ai_detail || "no local model available"}.`,
+    };
+    wrapper.appendChild(el("span", {
+      class: `tag ${state === "completed" ? "tag-green" : ""}`,
+      text: messages[state] || state,
+    }));
+    if (["completed", "failed", "unavailable", "skipped"].includes(state)) {
+      wrapper.appendChild(el("button", {
+        class: "btn btn-ghost btn-sm",
+        onclick: async (event) => {
+          event.target.disabled = true;
+          try {
+            await api.rerunAi(huntId);
+            toast("Model assessment queued. Reload in a moment.");
+          } catch (error) {
+            toast(error.message, "error");
+            event.target.disabled = false;
+          }
+        },
+      }, "Run model assessment"));
+    }
+    return wrapper;
+  }
 
   function hero() {
     return el("section", { class: "report-hero mb-3" }, [
@@ -238,6 +277,14 @@ export async function renderReport(root, navigate, huntId) {
         })
       ),
       el("select", {
+        class: "input", style: "max-width:190px",
+        onchange: (event) => { filters.origin = event.target.value; fill(); },
+      }, [
+        el("option", { value: "all", text: "Every origin" }),
+        ...Object.entries(ORIGIN_LABELS).map(([value, label]) =>
+          el("option", { value, text: label })),
+      ]),
+      el("select", {
         class: "input", style: "max-width:210px",
         onchange: (event) => { filters.category = event.target.value; fill(); },
       }, [
@@ -258,6 +305,7 @@ export async function renderReport(root, navigate, huntId) {
     const rows = observations.filter((item) => {
       if (filters.severity !== "all" && item.severity !== filters.severity) return false;
       if (filters.category !== "all" && item.category !== filters.category) return false;
+      if (filters.origin !== "all" && (item.origin || "rule") !== filters.origin) return false;
       if (!filters.search) return true;
       const haystack = [item.title, item.description, item.entity, item.rule_id, item.mitre_technique]
         .join(" ").toLowerCase();
@@ -272,7 +320,28 @@ export async function renderReport(root, navigate, huntId) {
       ));
       return;
     }
-    rows.forEach((item, index) => list.appendChild(observationCard(item, index + 1)));
+    const dismissed = rows.filter((item) => item.origin === "ai" && item.metrics
+      && item.metrics.verdict && item.metrics.verdict !== "suspicious");
+    const active = rows.filter((item) => !dismissed.includes(item));
+    active.forEach((item, index) => list.appendChild(observationCard(item, index + 1)));
+
+    if (!dismissed.length) return;
+    // Showing what was examined and cleared is what makes a hunt report credible.
+    const group = el("div", { class: "dismissed-group" });
+    const holder = el("div", { class: "hidden" });
+    group.appendChild(el("button", {
+      class: "btn btn-ghost btn-sm",
+      onclick: (event) => {
+        const open = holder.classList.toggle("hidden");
+        event.target.textContent = open
+          ? `Show ${dismissed.length} reviewed and dismissed`
+          : `Hide ${dismissed.length} reviewed and dismissed`;
+      },
+    }, `Show ${dismissed.length} reviewed and dismissed`));
+    dismissed.forEach((item, index) =>
+      holder.appendChild(observationCard(item, active.length + index + 1)));
+    group.appendChild(holder);
+    list.appendChild(group);
   }
 
   function toggleAll(open) {
@@ -287,6 +356,7 @@ export async function renderReport(root, navigate, huntId) {
     const body = el("div", { class: "obs-body hidden" }, [
       el("div", { class: "kv-grid mt-2" }, [
         kv("Detection", item.rule_id),
+        kv("Origin", ORIGIN_LABELS[item.origin || "rule"] || item.origin),
         kv("Type", item.detection_type),
         kv("Confidence", item.confidence),
         kv("Affected entity", item.entity || "not attributed"),
@@ -295,8 +365,17 @@ export async function renderReport(root, navigate, huntId) {
         kv("First seen", item.first_seen ? formatDate(item.first_seen) : "not available"),
         kv("Last seen", item.last_seen ? formatDate(item.last_seen) : "not available"),
       ]),
+      ...(item.origin === "ai"
+        ? [el("div", { class: "notice notice-warn" },
+            `Written by the local model ${item.model_name || ""}, at ${item.ai_confidence || "unknown"} ` +
+            "confidence, from measurements the engine produced. Validate before acting on it.")]
+        : []),
       el("div", { class: "obs-section-title", text: "What was detected" }),
       el("p", { text: item.description }),
+      ...(item.benign_explanation
+        ? [el("div", { class: "obs-section-title", text: "The most likely innocent explanation" }),
+           el("p", { class: "muted", text: item.benign_explanation })]
+        : []),
       ...(item.evidence || []).length ? [el("div", { class: "obs-section-title", text: "Original log evidence" })] : [],
       ...(item.evidence || []).slice(0, 6).map((evidence) =>
         el("div", {}, [

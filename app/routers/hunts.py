@@ -15,7 +15,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_analyst
 from .. import hypotheses as hypothesis_service
 from ..engine.catalog import get_hypothesis
-from ..hunt_service import schedule
+from ..hunt_service import schedule, schedule_ai
 from ..models import AuditLog, Hunt, Observation, User, new_id
 from ..serializers import hunt_payload, observation_payload
 
@@ -198,6 +198,32 @@ def delete_hunt(hunt_id: str, user: User = Depends(require_analyst), db: Session
     db.delete(hunt)
     db.add(AuditLog(tenant_id=user.tenant_id, user_id=user.id, action="hunt.deleted", detail=hunt_id))
     db.commit()
+
+
+@router.post("/{hunt_id}/ai-analysis", status_code=202)
+def rerun_ai_analysis(
+    hunt_id: str,
+    user: User = Depends(require_analyst),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Have a local model adjudicate this hunt's behavioural candidates again.
+
+    The candidates are not stored, so the evidence is parsed again. That costs what
+    the parsing stage of a hunt costs, and it keeps the database free of a copy of
+    every profile from every hunt ever run.
+    """
+    hunt = _fetch(db, user, hunt_id)
+    if hunt.status != "completed":
+        raise HTTPException(status_code=409, detail="The hunt has not completed")
+    if hunt.ai_status == "running":
+        raise HTTPException(status_code=409, detail="A model analysis is already running")
+    if not Path(hunt.archive_path).exists():
+        raise HTTPException(status_code=410, detail="The evidence archive is no longer available")
+    hunt.ai_status = "pending"
+    hunt.ai_detail = "Queued"
+    db.commit()
+    schedule_ai(hunt.id)
+    return hunt_payload(hunt)
 
 
 @router.post("/{hunt_id}/rerun")

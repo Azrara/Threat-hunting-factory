@@ -711,6 +711,7 @@ def _behaviour_finding(candidate: BehaviourCandidate) -> Finding:
         confidence="low",
         category="anomaly",
         detection_type="behavioural",
+        origin="anomaly",
         risk=RISK_BY_KIND.get(profile.kind, ""),
         impact=IMPACT_BY_KIND.get(profile.kind, ""),
         recommendation=(
