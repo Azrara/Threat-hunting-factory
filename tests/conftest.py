@@ -17,6 +17,8 @@ os.environ["THF_DATA_DIR"] = str(_TEST_DATA_DIR)
 os.environ["THF_DATABASE_URL"] = f"sqlite:///{_TEST_DATA_DIR / 'test.db'}"
 os.environ["THF_JWT_SECRET"] = "unit-test-secret-value-that-is-long-enough-1234567890"
 os.environ["THF_SEED_DEMO"] = "0"
+# The suite must never reach the internet, so the weekly collector never starts.
+os.environ["THF_CTI_ENABLED"] = "0"
 
 
 @pytest.fixture(scope="session")

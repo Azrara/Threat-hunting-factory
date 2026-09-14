@@ -12,12 +12,14 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from . import hypotheses as hypothesis_service
+from .ai.collector import schedule as collector_schedule
+from .ai.config import ai_settings
 from .attack import version as attack_version
 from .database import SessionLocal, init_db
 from .engine import catalog as catalog_registry
 from .engine.catalog import validate_catalogue
 from .engine.rules import statistics as rule_statistics
-from .routers import admin, ai, auth, catalog, hunts, reports, stats
+from .routers import admin, ai, auth, catalog, cti, hunts, reports, stats
 from .seed import seed_demo
 
 logger = logging.getLogger("thf")
@@ -40,7 +42,13 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
     logger.info("Detection library loaded: %s", rule_statistics())
+    if collector_schedule.start():
+        logger.info(
+            "Collector scheduled for weekday %s at %02d:00 UTC",
+            ai_settings.collector_weekday, ai_settings.collector_hour,
+        )
     yield
+    collector_schedule.stop()
 
 
 app = FastAPI(
@@ -57,6 +65,7 @@ app.include_router(reports.router)
 app.include_router(stats.router)
 app.include_router(admin.router)
 app.include_router(ai.router)
+app.include_router(cti.router)
 
 
 @app.exception_handler(RequestValidationError)

@@ -494,7 +494,7 @@ installed.
 | 0 | Model ladder, hardware detection, Ollama client, `/api/ai/status`, status indicator. **Done** | The operator can see what the host can run and what to pull |
 | 1 | Agent 2 stage A: entity profiler, peer outliers, sequence surprise, anomaly observations. **Done** | Observations beyond fixed rules, with no model at all |
 | 2 | Generated hypotheses in the data model and the catalogue, shared across tenants, with the review queue UI. **Done** | The structure agent 1 writes into |
-| 3 | Agent 1: feeds, fetch, relevance filter, extraction, grounding, dedupe, weekly schedule | The collector as requested |
+| 3 | Agent 1: feeds, fetch, relevance filter, extraction, grounding, dedupe, weekly schedule. **Done** | The collector as requested |
 | 4 | Agent 2 stage B: adjudication, narration, guards, report AI section | The analyst agent as requested |
 | 5 | Learned parsers for unknown formats | Real coverage of arbitrary log types |
 | 6 | Attack story correlation and the PDF executive summary | Report quality |
@@ -608,4 +608,40 @@ T1574.001. Following revocations means those rules still match hypotheses that n
 identifier, so nothing is broken, but a report still prints the retired identifier. Migrating the
 library is a separate change, deliberately not folded into this one.
 
-Next: phase 3, the collector itself.
+**Phase 3, done.** The collector, in `app/ai/collector/`.
+
+* `http.py`, a deliberately polite client: robots.txt honoured, one host never hit faster than a
+  fixed rate, responses capped at 8 MB, conditional requests so an unchanged feed costs one round
+  trip, and non HTTP addresses refused before they reach the network.
+* `feeds.py`, RSS and Atom with the standard library, so a malformed feed produces a skipped source
+  rather than a stack trace at two in the morning. It also answers the question a weekly cadence
+  raises: whether a feed's oldest item is newer than the previous run, which is the observable
+  symptom of articles having scrolled off unseen.
+* `fetch.py`, article text without the navigation, the cookie banner and the newsletter form, plus
+  PDF through the optional `pypdf`.
+* `relevance.py`, the filter that makes a weekly run affordable. Scoring on vocabulary costs
+  microseconds and removes the press releases before anything is chunked. In the end to end run,
+  two articles were read and one reached the model.
+* `extract.py`, the model call. The article is never in the system prompt, it sits inside delimiters
+  that are stripped out of the text itself so a page cannot close its own data block, the telemetry
+  field is an enumeration of the 23 known sources so it cannot be invented, and every hypothesis
+  carries a quote that must appear in the chunk it came from.
+* `runner.py`, one run, built to survive other people's websites. A feed that fails does not stop the
+  run, an article that will not parse does not stop the source, a model that dies mid run does not
+  lose what was already collected, and every outcome including the failures lands in the record.
+* `schedule.py` and `__main__.py`, one run a week with a pure due calculation that can be tested
+  without waiting a week, plus `python -m app.ai.collector --once` for cron or a systemd timer.
+
+**Verified end to end through the interface**, against a real feed served over real sockets and a
+model server answering on the loopback: one source read, two articles fetched with robots.txt
+honoured, one judged worth reading, one model call, two grounded candidates in the review queue with
+their technique, tactic, telemetry, quote and source link. The marketing article never reached the
+model at all.
+
+Three things testing changed. A first run reported every feed as rotated, because the fallback window
+is not the same thing as a previous run and there is nothing to have missed before the first one. The
+candidate ceiling held between articles but not inside one, so an article proposing three hypotheses
+could pass it. And the shipped source list reappeared on every run, which would have overwritten an
+operator who curates their own.
+
+Next: phase 4, the analyst agent's model stage.

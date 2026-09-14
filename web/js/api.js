@@ -83,6 +83,13 @@ export const api = {
   hypotheses: (params = {}) => request(`/api/hypotheses?${new URLSearchParams(params)}`),
   hypothesis: (id) => request(`/api/hypotheses/${encodeURIComponent(id)}`),
   dataSources: () => request("/api/data-sources"),
+  collectorStatus: () => request("/api/cti/status"),
+  collectorRuns: (limit = 10) => request(`/api/cti/runs?limit=${limit}`),
+  collectorSources: () => request("/api/cti/sources"),
+  collectorArticles: (limit = 40) => request(`/api/cti/articles?limit=${limit}`),
+  runCollector: () => request("/api/cti/run", { method: "POST" }),
+  setSourceActive: (id, isActive) =>
+    request(`/api/cti/sources/${encodeURIComponent(id)}`, { method: "PATCH", json: { is_active: isActive } }),
   reviewQueue: (status = "review") => request(`/api/hypotheses/review?status=${encodeURIComponent(status)}`),
   publishCandidate: (id, note = "") =>
     request(`/api/hypotheses/review/${encodeURIComponent(id)}/publish`, { method: "POST", json: { note } }),

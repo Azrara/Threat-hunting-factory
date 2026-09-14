@@ -126,3 +126,7 @@ class CandidateIn(BaseModel):
 
 class ReviewIn(BaseModel):
     note: str = Field(default="", max_length=2000)
+
+
+class FeedSourceIn(BaseModel):
+    is_active: bool | None = None

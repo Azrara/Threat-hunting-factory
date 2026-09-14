@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1651%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1759%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1651 | 0 | 0 |
-| 3.12 | 1651 | 0 | 0 |
-| 3.13 | 1651 | 0 | 0 |
+| 3.11 | 1759 | 0 | 0 |
+| 3.12 | 1759 | 0 | 0 |
+| 3.13 | 1759 | 0 | 0 |
 
 ## Quick start
 
@@ -322,6 +322,14 @@ library, and a technique no rule covers is published as a named detection gap th
 profiling alone. Published hypotheses are shared by every workspace, since they come from public
 reporting and never from client evidence.
 
+**The collector runs once a week, on its own.** It reads a shipped list of vendor reporting,
+advisories and research feeds, keeps what actually describes attacker behaviour, and proposes
+hypotheses into the review queue. It honours robots.txt, never hits one host faster than a fixed
+rate, and asks each feed conditionally so an unchanged one costs a single request. A vocabulary
+filter decides what is worth reading before any model is involved, which is what keeps a run to a few
+hundred calls rather than a few thousand. Run it on demand from the interface, or from
+`python -m app.ai.collector --once` under cron.
+
 The rest is designed and not yet implemented. The whole layer is optional at every step: with no model
 server installed the platform behaves exactly as it does today.
 
@@ -331,6 +339,10 @@ THF_OLLAMA_URL            the model server, default http://127.0.0.1:11434
 THF_AI_ENABLED            set to 0 to switch the model layer off entirely
 THF_BEHAVIOUR             set to 0 to switch behavioural profiling off
 THF_BEHAVIOUR_MAX_EVENTS  corpus size above which profiling is skipped
+THF_CTI_ENABLED           set to 0 to switch the weekly collector off
+THF_CTI_DAY               weekday to collect on, 0 is Monday, default 6
+THF_CTI_HOUR              hour to collect at, UTC, default 2
+THF_CTI_MAX_CANDIDATES    hypotheses proposed per run, default 25
 ```
 
 ## Limitations

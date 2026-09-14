@@ -9,3 +9,6 @@ pytest>=8.0
 httpx>=0.27
 # Optional: unlocks parsing of binary Windows event logs (.evtx) directly.
 python-evtx>=0.7
+# Optional: lets the hypothesis collector read research papers published as PDF.
+# Without it, PDF sources are skipped and everything else works unchanged.
+pypdf>=4.0

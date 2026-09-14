@@ -1,0 +1,23 @@
+{
+  "sources": [
+    {"slug": "dfir-report", "name": "The DFIR Report", "url": "https://thedfirreport.com/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "talos", "name": "Cisco Talos Intelligence", "url": "https://blog.talosintelligence.com/rss/", "kind": "rss", "category": "vendor"},
+    {"slug": "unit42", "name": "Palo Alto Unit 42", "url": "https://unit42.paloaltonetworks.com/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "securelist", "name": "Securelist by Kaspersky", "url": "https://securelist.com/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "welivesecurity", "name": "ESET WeLiveSecurity", "url": "https://www.welivesecurity.com/en/rss/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "elastic-security-labs", "name": "Elastic Security Labs", "url": "https://www.elastic.co/security-labs/rss/feed.xml", "kind": "rss", "category": "vendor"},
+    {"slug": "red-canary", "name": "Red Canary", "url": "https://redcanary.com/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "specterops", "name": "SpecterOps", "url": "https://posts.specterops.io/feed", "kind": "rss", "category": "vendor"},
+    {"slug": "volexity", "name": "Volexity", "url": "https://www.volexity.com/blog/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "sekoia", "name": "Sekoia Threat Intelligence", "url": "https://blog.sekoia.io/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "huntress", "name": "Huntress", "url": "https://www.huntress.com/blog/rss.xml", "kind": "rss", "category": "vendor"},
+    {"slug": "microsoft-security", "name": "Microsoft Security Blog", "url": "https://www.microsoft.com/en-us/security/blog/feed/", "kind": "rss", "category": "vendor"},
+    {"slug": "google-threat-intel", "name": "Google Threat Intelligence", "url": "https://cloud.google.com/blog/topics/threat-intelligence/rss", "kind": "rss", "category": "vendor"},
+    {"slug": "trendmicro", "name": "Trend Micro Research", "url": "https://feeds.trendmicro.com/TrendMicroResearch", "kind": "rss", "category": "vendor"},
+    {"slug": "proofpoint", "name": "Proofpoint Threat Insight", "url": "https://www.proofpoint.com/us/rss.xml", "kind": "rss", "category": "vendor"},
+    {"slug": "cisa-advisories", "name": "CISA Cybersecurity Advisories", "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml", "kind": "rss", "category": "advisory"},
+    {"slug": "cert-fr", "name": "CERT-FR Avis et alertes", "url": "https://www.cert.ssi.gouv.fr/feed/", "kind": "rss", "category": "advisory"},
+    {"slug": "ncsc-uk", "name": "NCSC UK Reports", "url": "https://www.ncsc.gov.uk/api/1/services/v1/report-rss-feed.xml", "kind": "rss", "category": "advisory"},
+    {"slug": "arxiv-crypto", "name": "arXiv cs.CR", "url": "http://export.arxiv.org/api/query?search_query=cat:cs.CR&sortBy=submittedDate&sortOrder=descending&max_results=100", "kind": "arxiv", "category": "research"}
+  ]
+}

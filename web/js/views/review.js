@@ -17,15 +17,97 @@ const STATUSES = [
 
 export async function renderReview(root) {
   let status = "review";
+  const collector = el("section", { class: "collector-panel mb-3" });
   const list = el("div", { class: "queue-grid" });
   const filters = el("div", { class: "filters" });
   const summary = el("div", { class: "muted text-sm mb-2" });
 
   clear(root);
+  root.appendChild(collector);
   root.appendChild(filters);
   root.appendChild(summary);
   root.appendChild(list);
-  await load();
+  await Promise.all([loadCollector(), load()]);
+
+  function metric(value, label) {
+    return el("div", { class: "collector-metric" }, [
+      el("div", { class: "n", text: String(value) }),
+      el("div", { class: "l", text: label }),
+    ]);
+  }
+
+  async function loadCollector() {
+    let payload;
+    try {
+      payload = await api.collectorStatus();
+    } catch (error) {
+      clear(collector);
+      return;
+    }
+    const last = payload.last_run;
+    clear(collector);
+    collector.appendChild(el("div", { class: "row-between wrap mb-2" }, [
+      el("div", {}, [
+        el("div", { class: "section-label mb-0", text: "The collector" }),
+        el("div", {
+          class: "muted text-sm",
+          text: payload.enabled
+            ? `Runs once a week. Next run ${(payload.next_run_at || "").slice(0, 16).replace("T", " ")} UTC, ` +
+              `reading ${payload.sources_active} sources.`
+            : "Switched off by configuration.",
+        }),
+      ]),
+      el("button", {
+        class: "btn btn-sm",
+        disabled: !payload.enabled || payload.running,
+        onclick: async (event) => {
+          event.target.disabled = true;
+          try {
+            await api.runCollector();
+            toast("Collection started. This takes a while.");
+            setTimeout(() => {
+              loadCollector();
+              load();
+            }, 4000);
+          } catch (error) {
+            toast(error.message, "error");
+            event.target.disabled = false;
+          }
+        },
+      }, payload.running ? "Collecting ..." : "Collect now"),
+    ]));
+
+    if (!last) {
+      collector.appendChild(el("p", { class: "muted text-sm mb-0",
+        text: "No collection has run yet." }));
+      return;
+    }
+    collector.appendChild(el("div", { class: "collector-metrics" }, [
+      metric(last.sources_polled, "sources read"),
+      metric(last.articles_fetched, "articles read"),
+      metric(last.articles_relevant, "worth reading"),
+      metric(last.candidates_created, "proposed"),
+      metric(last.duplicates_merged, "duplicates"),
+      metric(last.model_calls, "model calls"),
+    ]));
+    const details = [
+      `Last run ${last.status}, ${(last.started_at || "").slice(0, 16).replace("T", " ")} UTC`,
+      last.model_name ? `using ${last.model_name}` : "with no model available",
+      `${(last.duration_ms / 1000).toFixed(1)} seconds`,
+    ];
+    collector.appendChild(el("div", { class: "muted text-sm", text: details.join(", ") }));
+    for (const warning of last.warnings || []) {
+      collector.appendChild(el("div", { class: "notice notice-warn", text: warning }));
+    }
+    if ((last.rotated_feeds || []).length) {
+      collector.appendChild(el("div", { class: "notice notice-warn",
+        text: `These feeds published more than they hold between two runs, so something may have been ` +
+              `missed: ${last.rotated_feeds.join(", ")}.` }));
+    }
+    if (last.error) {
+      collector.appendChild(el("div", { class: "notice notice-warn", text: last.error }));
+    }
+  }
 
   async function load() {
     clear(list).appendChild(spinner("Loading the review queue"));

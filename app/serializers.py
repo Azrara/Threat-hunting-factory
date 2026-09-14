@@ -157,3 +157,43 @@ def generated_hypothesis_payload(row) -> dict:
         "review_note": row.review_note,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
+
+
+def collector_run_payload(row) -> dict:
+    return {
+        "id": row.id,
+        "trigger": row.trigger,
+        "status": row.status,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "duration_ms": row.duration_ms,
+        "sources_polled": row.sources_polled,
+        "sources_failed": row.sources_failed,
+        "articles_seen": row.articles_seen,
+        "articles_fetched": row.articles_fetched,
+        "articles_relevant": row.articles_relevant,
+        "articles_extracted": row.articles_extracted,
+        "candidates_created": row.candidates_created,
+        "duplicates_merged": row.duplicates_merged,
+        "model_calls": row.model_calls,
+        "model_name": row.model_name,
+        "rotated_feeds": list(row.rotated_feeds or []),
+        "warnings": list(row.warnings or []),
+        "error": (row.error or "").strip().splitlines()[-1] if row.error else "",
+    }
+
+
+def feed_source_payload(row) -> dict:
+    return {
+        "id": row.id,
+        "slug": row.slug,
+        "name": row.name,
+        "url": row.url,
+        "kind": row.kind,
+        "category": row.category,
+        "is_active": row.is_active,
+        "last_fetched_at": row.last_fetched_at.isoformat() if row.last_fetched_at else None,
+        "last_status": row.last_status,
+        "consecutive_failures": row.consecutive_failures,
+        "oldest_item_at": row.oldest_item_at.isoformat() if row.oldest_item_at else None,
+    }

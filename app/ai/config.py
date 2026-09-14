@@ -345,5 +345,20 @@ class AiSettings:
         self.temperature: float = _env_float("THF_AI_TEMPERATURE", 0.0)
         self.context_tokens: int = _env_int("THF_AI_CONTEXT", 16384)
 
+        # The collector. One run a week, overnight, with nobody waiting.
+        self.collector_enabled: bool = os.environ.get("THF_CTI_ENABLED", "1") != "0"
+        # 0 is Monday, 6 is Sunday.
+        self.collector_weekday: int = max(0, min(6, _env_int("THF_CTI_DAY", 6)))
+        self.collector_hour: int = max(0, min(23, _env_int("THF_CTI_HOUR", 2)))
+        # How far back the very first run looks, when there is no previous one.
+        self.collector_first_run_days: int = _env_int("THF_CTI_FIRST_RUN_DAYS", 30)
+        self.collector_max_articles: int = _env_int("THF_CTI_MAX_ARTICLES", 120)
+        self.collector_max_candidates: int = _env_int("THF_CTI_MAX_CANDIDATES", 25)
+        self.collector_max_model_calls: int = _env_int("THF_CTI_MAX_MODEL_CALLS", 400)
+        self.collector_respect_robots: bool = os.environ.get("THF_CTI_ROBOTS", "1") != "0"
+        # An operator who curates their own feed list does not want the shipped one
+        # reappearing on every run.
+        self.collector_seed_sources: bool = os.environ.get("THF_CTI_SEED_SOURCES", "1") != "0"
+
 
 ai_settings = AiSettings()

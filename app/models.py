@@ -207,3 +207,85 @@ class GeneratedHypothesis(Base):
     review_note: Mapped[str] = mapped_column(Text, default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class FeedSource(Base):
+    """One publication the collector reads: a vendor blog, an advisory feed, a journal."""
+
+    __tablename__ = "feed_sources"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    url: Mapped[str] = mapped_column(String(1000))
+    kind: Mapped[str] = mapped_column(String(24), default="rss")  # rss, atom, arxiv
+    category: Mapped[str] = mapped_column(String(40), default="vendor")  # vendor, advisory, research
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Conditional GET state, so a feed that has not changed costs one request.
+    etag: Mapped[str] = mapped_column(String(400), default="")
+    last_modified: Mapped[str] = mapped_column(String(120), default="")
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str] = mapped_column(String(200), default="")
+    # The oldest item the feed still offers. When this is newer than the previous
+    # run, items published in between have rotated out of the feed unseen.
+    oldest_item_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CollectedArticle(Base):
+    """An article the collector has seen, so that it is never processed twice."""
+
+    __tablename__ = "collected_articles"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    url: Mapped[str] = mapped_column(String(1000))
+    canonical_url: Mapped[str] = mapped_column(String(1000), unique=True, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
+    title: Mapped[str] = mapped_column(String(400), default="")
+    source_slug: Mapped[str] = mapped_column(String(80), default="", index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # fetched, skipped, irrelevant, extracted, failed
+    decision: Mapped[str] = mapped_column(String(24), default="fetched", index=True)
+    reason: Mapped[str] = mapped_column(String(400), default="")
+    relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
+    characters: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_created: Mapped[int] = mapped_column(Integer, default=0)
+    run_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class CollectorRun(Base):
+    """One execution of the collector, and everything it did."""
+
+    __tablename__ = "collector_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    trigger: Mapped[str] = mapped_column(String(24), default="schedule")  # schedule, manual, cli
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    # running, completed, failed
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+    sources_polled: Mapped[int] = mapped_column(Integer, default=0)
+    sources_failed: Mapped[int] = mapped_column(Integer, default=0)
+    articles_seen: Mapped[int] = mapped_column(Integer, default=0)
+    articles_fetched: Mapped[int] = mapped_column(Integer, default=0)
+    articles_relevant: Mapped[int] = mapped_column(Integer, default=0)
+    articles_extracted: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_created: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates_merged: Mapped[int] = mapped_column(Integer, default=0)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+
+    model_name: Mapped[str] = mapped_column(String(120), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    # Feeds whose oldest available item is newer than the previous run: the
+    # observable symptom of articles rotating out between two weekly runs.
+    rotated_feeds: Mapped[list] = mapped_column(JSON, default=list)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
