@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1811%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1817%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1811 | 0 | 0 |
-| 3.12 | 1811 | 0 | 0 |
-| 3.13 | 1811 | 0 | 0 |
+| 3.11 | 1817 | 0 | 0 |
+| 3.12 | 1817 | 0 | 0 |
+| 3.13 | 1817 | 0 | 0 |
 
 ## Quick start
 
@@ -355,6 +355,24 @@ THF_CTI_HOUR              hour to collect at, UTC, default 2
 THF_CTI_MAX_CANDIDATES    hypotheses proposed per run, default 25
 THF_AI_MAX_CALLS          model calls per hunt for adjudication, default 60
 ```
+
+## Checking it end to end
+
+The test suite answers "does each piece behave". A separate check answers "does the
+thing actually work": it starts the application, stands up a publication and a model server on the
+loopback, and walks a real workspace through every journey the product offers, asserting at each
+step and continuing after a failure so that one broken thing does not hide the state of everything
+else.
+
+```
+python tools/end_to_end_check.py
+```
+
+140 checks across fourteen journeys: start up, tenancy and roles, the catalogue, a hunt on real
+evidence, reporting and PDF export, tenant isolation, the model layer, the analyst agent, the
+collector, the review queue, hunting with a collected hypothesis, hostile input, and every page of
+the interface in a real browser. Nothing reaches the internet. The browser pass is skipped when
+Playwright is absent, and the PDF content check when pypdf is.
 
 ## Limitations
 

