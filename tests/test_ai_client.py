@@ -146,8 +146,10 @@ class TestModelSelection:
 
     def test_the_last_resort_prefers_the_permissive_licence(self):
         selection = choose_chat_model([], ram_gb=2, vram_gb=0)
-        assert selection.tag == "qwen3:8b"
         assert CHAT_MODELS[selection.tag].licence == "Apache 2.0"
+        assert selection.tag == min(
+            CHAT_MODELS, key=lambda tag: CHAT_MODELS[tag].min_ram_gb
+        ), "the last resort must be the least demanding entry"
 
     def test_an_embedding_model_is_chosen_independently(self):
         selection = choose_embedding_model([], ram_gb=64, vram_gb=0)
@@ -444,3 +446,103 @@ class TestSettings:
         settings = AiSettings()
         assert settings.request_timeout == 180.0
         assert settings.max_calls_per_hunt == 60
+
+
+class TestAModelTheLadderDoesNotKnow:
+    """The ladder is a recommendation, not a list of the only models allowed to work.
+
+    The defect this guards was reported from a real machine: the operator pulled
+    qwen3:4b, which runs perfectly, and the platform reported itself degraded
+    because that tag was not on the list it happened to ship with.
+    """
+
+    def test_an_installed_model_off_the_ladder_is_used(self):
+        selection = choose_chat_model(
+            [{"name": "mistral-nemo:12b", "size": 7_100_000_000}], ram_gb=16, vram_gb=0
+        )
+        assert selection.tag == "mistral-nemo:12b"
+        assert selection.usable
+        assert "Installed on the server" in selection.reason
+
+    def test_a_ladder_entry_is_still_preferred(self):
+        selection = choose_chat_model(
+            [{"name": "mistral-nemo:12b", "size": 7_100_000_000},
+             {"name": "qwen3:8b", "size": 4_700_000_000}],
+            ram_gb=16, vram_gb=0,
+        )
+        assert selection.tag == "qwen3:8b"
+
+    def test_the_largest_that_fits_is_taken(self):
+        selection = choose_chat_model(
+            [{"name": "small:1b", "size": 900_000_000},
+             {"name": "bigger:7b", "size": 4_100_000_000}],
+            ram_gb=16, vram_gb=0,
+        )
+        assert selection.tag == "bigger:7b"
+
+    def test_one_that_does_not_fit_is_not_taken(self):
+        selection = choose_chat_model(
+            [{"name": "huge:70b", "size": 40_000_000_000}], ram_gb=10, vram_gb=0
+        )
+        assert selection.tag != "huge:70b"
+        assert not selection.installed
+
+    def test_an_embedding_model_is_never_chosen_to_adjudicate(self):
+        for name in ("bge-m3", "nomic-embed-text", "mxbai-embed-large", "all-minilm"):
+            selection = choose_chat_model(
+                [{"name": name, "size": 1_200_000_000}], ram_gb=16, vram_gb=0
+            )
+            assert selection.tag != name, f"{name} cannot answer questions"
+
+    def test_an_embedding_model_off_the_ladder_can_still_embed(self):
+        selection = choose_embedding_model(
+            [{"name": "mxbai-embed-large", "size": 700_000_000}], ram_gb=16, vram_gb=0
+        )
+        assert selection.tag == "mxbai-embed-large"
+        assert selection.usable
+
+    def test_a_plain_list_of_names_still_works(self):
+        selection = choose_chat_model(["qwen3:8b"], ram_gb=16, vram_gb=0)
+        assert selection.tag == "qwen3:8b"
+        assert selection.installed
+
+
+class TestMemoryHeadroom:
+    """What the host needs, not what the weights weigh.
+
+    Reported from a real machine: the platform recommended a 14B on a virtual
+    machine with sixteen gigabytes, and loading it killed the model server, because
+    the declared requirement counted the weights and nothing else.
+    """
+
+    def test_every_entry_leaves_room_for_the_context_and_the_host(self):
+        from app.ai.config import RUNTIME_OVERHEAD_GB
+
+        for choice in CHAT_MODELS.values():
+            assert choice.min_ram_gb >= choice.min_vram_gb, (
+                f"{choice.tag} claims to need less system memory than video memory, "
+                "but system memory also holds the operating system"
+            )
+            assert choice.min_ram_gb >= RUNTIME_OVERHEAD_GB
+
+    def test_the_estimate_for_an_installed_model_includes_overhead(self):
+        from app.ai.config import InstalledModel, RUNTIME_OVERHEAD_GB
+
+        model = InstalledModel("something:7b", size_bytes=4 * 1024**3)
+        assert model.estimated_ram_gb >= 4 + RUNTIME_OVERHEAD_GB
+
+    def test_a_model_with_no_reported_size_falls_back_to_the_ladder(self):
+        from app.ai.config import InstalledModel
+
+        assert InstalledModel("qwen3:8b").estimated_ram_gb == CHAT_MODELS["qwen3:8b"].min_ram_gb
+
+    def test_available_memory_is_what_the_choice_is_made_against(self):
+        from app.ai.config import detect_available_ram_gb, detect_ram_gb
+
+        assert detect_available_ram_gb() > 0
+        assert detect_available_ram_gb() <= detect_ram_gb()
+
+    def test_a_sixteen_gigabyte_host_with_little_free_gets_something_small(self):
+        """The real case: a desktop and a browser are already using the memory."""
+        selection = choose_chat_model([], ram_gb=6, vram_gb=0)
+        assert CHAT_MODELS[selection.tag].min_ram_gb <= 8

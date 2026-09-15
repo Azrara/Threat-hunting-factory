@@ -185,9 +185,25 @@ class OllamaClient:
     # -- introspection ----------------------------------------------------
 
     def installed_models(self) -> list[str]:
+        return [entry["name"] for entry in self.installed_model_details()]
+
+    def installed_model_details(self) -> list[dict]:
+        """Every model on the server, with the size the platform sizes it by."""
         payload = self._request("GET", "/api/tags", retries=0)
         models = payload.get("models") or []
-        return [str(entry.get("name", "")) for entry in models if entry.get("name")]
+        details = []
+        for entry in models:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or entry.get("model") or "").strip()
+            if not name:
+                continue
+            try:
+                size = int(entry.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            details.append({"name": name, "size": size})
+        return details
 
     def version(self) -> str:
         payload = self._request("GET", "/api/version", retries=0)

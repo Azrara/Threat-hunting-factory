@@ -104,6 +104,11 @@ class TestStatusWithAServer:
         assert status["ready"] is False
         assert "is not installed" in status["degraded_reason"]
 
+    def test_the_reason_says_what_to_run(self):
+        """An operator reading the chip should not have to guess the next command."""
+        status = build_status(client=client_for(server([])), hardware=CPU_HOST)
+        assert "ollama pull" in status["degraded_reason"]
+
     def test_the_installed_models_are_listed(self):
         status = build_status(client=client_for(server(["qwen3:8b"])), hardware=CPU_HOST)
         assert status["installed_models"] == ["qwen3:8b"]
@@ -114,9 +119,32 @@ class TestStatusWithAServer:
         status = build_status(client=client_for(server(["nomic-embed-text"])), hardware=CPU_HOST)
         assert status["ready"] is False
 
-    def test_a_chat_model_alone_is_not_enough(self):
+    def test_a_chat_model_alone_is_enough(self):
+        """Both agents need the chat model. Nothing calls for an embedding yet, so
+        requiring one made a working layer describe itself as degraded."""
         status = build_status(client=client_for(server(["qwen3:30b-a3b"])), hardware=CPU_HOST)
-        assert status["ready"] is False
+        assert status["ready"] is True
+        assert status["degraded_reason"] == ""
+
+    def test_the_embedding_model_is_offered_but_not_required(self):
+        status = build_status(client=client_for(server(["qwen3:30b-a3b"])), hardware=CPU_HOST)
+        assert status["embedding_model"]["required"] is False
+        assert status["embedding_model"]["pull_command"]
+
+    def test_nothing_in_the_platform_asks_for_an_embedding_yet(self):
+        """If this starts failing, readiness has to account for the embedding again."""
+        import ast
+        from pathlib import Path
+
+        callers = []
+        for path in Path("app").rglob("*.py"):
+            if path.name in ("client.py", "config.py", "status.py"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr == "embed":
+                    callers.append(str(path))
+        assert not callers, f"embeddings are used in {callers}, so readiness must require one"
 
     def test_a_host_that_cannot_run_anything_says_so(self):
         status = build_status(
@@ -124,6 +152,7 @@ class TestStatusWithAServer:
         )
         assert status["ready"] is False
         assert "cannot comfortably run" in status["degraded_reason"]
+        assert "GB of memory is available" in status["degraded_reason"]
 
 
 class TestStatusCache:

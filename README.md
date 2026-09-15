@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1817%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1832%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1817 | 0 | 0 |
-| 3.12 | 1817 | 0 | 0 |
-| 3.13 | 1817 | 0 | 0 |
+| 3.11 | 1832 | 0 | 0 |
+| 3.12 | 1832 | 0 | 0 |
+| 3.13 | 1832 | 0 | 0 |
 
 ## Quick start
 
@@ -300,10 +300,15 @@ rule library.
 
 Two pieces are in place.
 
-**Model selection.** The platform detects what the host can run, picks the best entry from a ranked
-ladder, and reports it at `GET /api/ai/status` and in the header. The ladder is ordered differently
-for CPU and GPU, because a mixture of experts model activates a fraction of its parameters per token
-and so beats a dense model of the same size on a processor while losing to it on a card.
+**Model selection.** The platform detects what the host can run, picks a model, and reports it at
+`GET /api/ai/status` and in the header. It chooses against the memory actually available rather than
+the memory installed, and every figure it compares against counts the weights plus the working
+context plus room for the host, because a recommendation that only counts the weights is how a model
+server gets killed the moment it loads. The ranked ladder is a recommendation, not a permitted list:
+any model already on the server that fits the host is used as it is. The ladder is ordered
+differently for CPU and GPU, because a mixture of experts model activates a fraction of its
+parameters per token and so beats a dense model of the same size on a processor while losing to it on
+a card.
 
 **Behavioural profiling, with no model at all.** Every hunt now also profiles each host, account,
 process, address, destination and client, compares each entity only against entities of the same kind

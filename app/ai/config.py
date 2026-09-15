@@ -11,10 +11,17 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-# Memory figures are indicative, for a 4 bit quantisation plus a working context of
-# around 16k tokens. They are used to rank choices, not to promise a footprint.
+# Memory figures are what the host needs to run the model comfortably, not what the
+# weights weigh. A 4 bit 14B is about nine gigabytes of weights, and then the key
+# value cache for a 16k context and the operating system and this application all
+# want memory at the same time. Declaring the weights alone is how a host gets told
+# it can run a model that then gets the model server killed the moment it loads it.
+#
+# min_ram_gb  total system memory, weights plus context plus room for everything else
+# min_vram_gb video memory, weights plus context only, the host keeps its own
 
 
 @dataclass(frozen=True)
@@ -37,32 +44,38 @@ CHAT_MODELS: dict[str, ModelChoice] = {
     choice.tag: choice
     for choice in (
         ModelChoice(
-            "gpt-oss:120b", "GPT OSS 120B", "120B", "5.1B", 72, 80, "Apache 2.0",
+            "gpt-oss:120b", "GPT OSS 120B", "120B", "5.1B", 80, 80, "Apache 2.0",
             "Best quality in this list. Needs a server class accelerator or a very large host.",
         ),
         ModelChoice(
-            "qwen3:32b", "Qwen3 32B", "32B", "32B", 24, 24, "Apache 2.0",
+            "qwen3:32b", "Qwen3 32B", "32B", "32B", 28, 24, "Apache 2.0",
             "Best dense model that fits a single 24 GB card. Slow on CPU.",
         ),
         ModelChoice(
-            "qwen3:30b-a3b", "Qwen3 30B A3B", "30B", "3B", 22, 22, "Apache 2.0",
+            "qwen3:30b-a3b", "Qwen3 30B A3B", "30B", "3B", 26, 20, "Apache 2.0",
             "Mixture of experts: 30B of knowledge at the speed of a 3B model. "
             "The best choice when there is no GPU but plenty of memory.",
         ),
         ModelChoice(
-            "gpt-oss:20b", "GPT OSS 20B", "20B", "3.6B", 16, 16, "Apache 2.0",
-            "Mixture of experts, strong at structured output, fits a 16 GB host.",
+            "gpt-oss:20b", "GPT OSS 20B", "20B", "3.6B", 20, 16, "Apache 2.0",
+            "Mixture of experts, strong at structured output.",
         ),
         ModelChoice(
-            "qwen3:14b", "Qwen3 14B", "14B", "14B", 11, 12, "Apache 2.0",
-            "Dense fallback for a 12 GB card.",
+            "qwen3:14b", "Qwen3 14B", "14B", "14B", 16, 12, "Apache 2.0",
+            "Dense, and the largest that is sensible without a card. A 16 GB host "
+            "running anything else alongside will struggle.",
         ),
         ModelChoice(
-            "qwen3:8b", "Qwen3 8B", "8B", "8B", 7, 8, "Apache 2.0",
-            "Runs on almost any laptop. Weakest schema adherence of the list.",
+            "qwen3:8b", "Qwen3 8B", "8B", "8B", 11, 8, "Apache 2.0",
+            "Comfortable on a 16 GB laptop or a small virtual machine.",
         ),
         ModelChoice(
-            "llama3.1:8b", "Llama 3.1 8B", "8B", "8B", 7, 8, "Meta Llama 3.1 Community",
+            "qwen3:4b", "Qwen3 4B", "4B", "4B", 8, 6, "Apache 2.0",
+            "The smallest that still holds a JSON schema. For a virtual machine with "
+            "little memory to spare, this is the one that works.",
+        ),
+        ModelChoice(
+            "llama3.1:8b", "Llama 3.1 8B", "8B", "8B", 11, 8, "Meta Llama 3.1 Community",
             "Last resort. Check the licence before shipping this to a client.",
         ),
     )
@@ -72,10 +85,12 @@ CHAT_MODELS: dict[str, ModelChoice] = {
 # far faster than a dense model of the same size on CPU, and the difference is
 # large enough to change which model is the right default.
 GPU_LADDER: tuple[str, ...] = (
-    "gpt-oss:120b", "qwen3:32b", "qwen3:30b-a3b", "gpt-oss:20b", "qwen3:14b", "qwen3:8b", "llama3.1:8b",
+    "gpt-oss:120b", "qwen3:32b", "qwen3:30b-a3b", "gpt-oss:20b", "qwen3:14b",
+    "qwen3:8b", "qwen3:4b", "llama3.1:8b",
 )
 CPU_LADDER: tuple[str, ...] = (
-    "qwen3:30b-a3b", "gpt-oss:20b", "qwen3:32b", "qwen3:14b", "qwen3:8b", "llama3.1:8b",
+    "qwen3:30b-a3b", "gpt-oss:20b", "qwen3:32b", "qwen3:14b", "qwen3:8b",
+    "qwen3:4b", "llama3.1:8b",
 )
 
 EMBED_MODELS: dict[str, ModelChoice] = {
@@ -95,6 +110,63 @@ EMBED_LADDER: tuple[str, ...] = ("bge-m3", "nomic-embed-text")
 
 # A GPU below this is not worth offloading a working model onto.
 MIN_USEFUL_VRAM_GB = 8
+
+# Names that mark a model as producing embeddings rather than answers. An
+# embedding model cannot adjudicate anything, so it must never be chosen to.
+EMBEDDING_NAME_HINTS = (
+    "embed", "bge", "minilm", "e5-", "gte-", "arctic", "paraphrase", "sentence",
+)
+# On top of the weights: the key value cache for a working context, plus room for
+# the operating system and this application.
+RUNTIME_OVERHEAD_GB = 4
+
+
+@dataclass(frozen=True)
+class InstalledModel:
+    """A model the server reports, and what it would cost to run."""
+
+    tag: str
+    size_bytes: int = 0
+
+    @property
+    def is_embedding(self) -> bool:
+        name = self.tag.lower()
+        return any(hint in name for hint in EMBEDDING_NAME_HINTS)
+
+    @property
+    def estimated_ram_gb(self) -> int:
+        """From the weights on disk, which is the one number every server reports."""
+        if self.size_bytes <= 0:
+            known = CHAT_MODELS.get(self.tag) or CHAT_MODELS.get(_normalise(self.tag))
+            return known.min_ram_gb if known else RUNTIME_OVERHEAD_GB
+        weights = self.size_bytes / (1024**3)
+        return int(weights + RUNTIME_OVERHEAD_GB + 0.999)
+
+    @property
+    def estimated_vram_gb(self) -> int:
+        if self.size_bytes <= 0:
+            known = CHAT_MODELS.get(self.tag) or CHAT_MODELS.get(_normalise(self.tag))
+            return known.min_vram_gb if known else 2
+        return int(self.size_bytes / (1024**3) + 2.999)
+
+
+def as_installed(entries: "Sequence[str | dict | InstalledModel]") -> list[InstalledModel]:
+    """Accept a plain list of names or the richer listing a server returns."""
+    models: list[InstalledModel] = []
+    for entry in entries or ():
+        if isinstance(entry, InstalledModel):
+            models.append(entry)
+        elif isinstance(entry, dict):
+            name = str(entry.get("name") or entry.get("model") or "").strip()
+            if name:
+                try:
+                    size = int(entry.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                models.append(InstalledModel(name, size))
+        elif isinstance(entry, str) and entry.strip():
+            models.append(InstalledModel(entry.strip()))
+    return models
 
 
 @dataclass(frozen=True)
@@ -143,15 +215,34 @@ class ModelSelection:
 # ---------------------------------------------------------------------------
 
 
-def detect_ram_gb() -> int:
-    """Total system memory in whole gigabytes, or 0 when it cannot be read."""
+def _meminfo(field: str) -> int:
     try:
         with open("/proc/meminfo", encoding="utf-8") as handle:
             for line in handle:
-                if line.startswith("MemTotal:"):
+                if line.startswith(f"{field}:"):
                     return int(int(line.split()[1]) / (1024 * 1024))
     except (OSError, ValueError, IndexError):
         pass
+    return 0
+
+
+def detect_available_ram_gb() -> int:
+    """Memory a model could actually take, in whole gigabytes.
+
+    Total memory is the wrong number to choose against. A virtual machine with
+    sixteen gigabytes running a desktop, a browser and this application does not
+    have sixteen gigabytes to give to a model, and choosing as though it did is
+    how the model server gets killed the moment it loads.
+    """
+    available = _meminfo("MemAvailable")
+    return available or detect_ram_gb()
+
+
+def detect_ram_gb() -> int:
+    """Total system memory in whole gigabytes, or 0 when it cannot be read."""
+    total = _meminfo("MemTotal")
+    if total:
+        return total
     try:
         pages = os.sysconf("SC_PHYS_PAGES")
         page_size = os.sysconf("SC_PAGE_SIZE")
@@ -205,27 +296,27 @@ def _normalise(tag: str) -> str:
     return tag.split("-", 1)[0].strip().lower()
 
 
-def _is_installed(tag: str, installed: list[str]) -> bool:
+def _is_installed(tag: str, installed: list[InstalledModel]) -> bool:
     wanted = _normalise(tag)
-    return any(_normalise(name) == wanted for name in installed)
+    return any(_normalise(model.tag) == wanted for model in installed)
 
 
 def choose_chat_model(
-    installed: list[str],
+    installed: Sequence[str | dict | InstalledModel],
     ram_gb: int,
     vram_gb: int,
     override: str = "",
 ) -> ModelSelection:
-    return _choose(installed, ram_gb, vram_gb, override, CHAT_MODELS, _ladder_for(vram_gb))
+    return _choose(installed, ram_gb, vram_gb, override, CHAT_MODELS, _ladder_for(vram_gb), False)
 
 
 def choose_embedding_model(
-    installed: list[str],
+    installed: Sequence[str | dict | InstalledModel],
     ram_gb: int,
     vram_gb: int,
     override: str = "",
 ) -> ModelSelection:
-    return _choose(installed, ram_gb, vram_gb, override, EMBED_MODELS, EMBED_LADDER)
+    return _choose(installed, ram_gb, vram_gb, override, EMBED_MODELS, EMBED_LADDER, True)
 
 
 def _ladder_for(vram_gb: int) -> tuple[str, ...]:
@@ -233,13 +324,15 @@ def _ladder_for(vram_gb: int) -> tuple[str, ...]:
 
 
 def _choose(
-    installed: list[str],
+    entries: Sequence[str | dict | InstalledModel],
     ram_gb: int,
     vram_gb: int,
     override: str,
     catalogue: dict[str, ModelChoice],
     ladder: tuple[str, ...],
+    wants_embedding: bool,
 ) -> ModelSelection:
+    installed = as_installed(entries)
     if override:
         choice = catalogue.get(override)
         return ModelSelection(
@@ -252,6 +345,7 @@ def _choose(
         )
 
     on_gpu = vram_gb >= MIN_USEFUL_VRAM_GB
+    budget = vram_gb if on_gpu else ram_gb
 
     def runnable(tag: str) -> bool:
         choice = catalogue[tag]
@@ -263,7 +357,7 @@ def _choose(
 
     for position, tag in enumerate(fitting):
         if _is_installed(tag, installed):
-            where = f"{vram_gb} GB of video memory" if on_gpu else f"{ram_gb} GB of system memory"
+            where = f"{vram_gb} GB of video memory" if on_gpu else f"{ram_gb} GB of memory"
             # Something better fits this host but is not pulled yet. Say so rather
             # than silently settling: pulling it is one command.
             upgrade = fitting[0] if position else ""
@@ -276,6 +370,29 @@ def _choose(
                 pull_command="",
                 upgrade_tag=upgrade,
             )
+
+    # Nothing from the ladder is installed, but the operator may well have pulled
+    # something else. The ladder is a recommendation, not a list of the only models
+    # that are allowed to work: a model that is on the server and fits the host is
+    # a model this platform can use.
+    others = [
+        model for model in installed
+        if model.is_embedding == wants_embedding
+        and not any(_normalise(model.tag) == _normalise(tag) for tag in ladder)
+        and (model.estimated_vram_gb if on_gpu else model.estimated_ram_gb) <= budget
+    ]
+    if others:
+        # The largest that fits, since capability follows size within a family.
+        best = max(others, key=lambda model: (model.size_bytes, model.tag))
+        return ModelSelection(
+            tag=best.tag,
+            choice=catalogue.get(_normalise(best.tag)),
+            installed=True,
+            fits=True,
+            reason="Installed on the server and within this host's memory",
+            pull_command="",
+            upgrade_tag=fitting[0] if fitting else "",
+        )
 
     if fitting:
         tag = fitting[0]
@@ -290,8 +407,8 @@ def _choose(
 
     # Nothing fits. Offer the least demanding entry, preferring the one earlier in
     # the ladder when two are equally light, so a permissive licence wins the tie.
-    budget = (lambda tag: catalogue[tag].min_vram_gb) if on_gpu else (lambda tag: catalogue[tag].min_ram_gb)
-    smallest = min(ladder, key=lambda tag: (budget(tag), ladder.index(tag)))
+    cost = (lambda tag: catalogue[tag].min_vram_gb) if on_gpu else (lambda tag: catalogue[tag].min_ram_gb)
+    smallest = min(ladder, key=lambda tag: (cost(tag), ladder.index(tag)))
     return ModelSelection(
         tag=smallest,
         choice=catalogue[smallest],
