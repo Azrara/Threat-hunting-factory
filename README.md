@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1832%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1843%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1832 | 0 | 0 |
-| 3.12 | 1832 | 0 | 0 |
-| 3.13 | 1832 | 0 | 0 |
+| 3.11 | 1843 | 0 | 0 |
+| 3.12 | 1843 | 0 | 0 |
+| 3.13 | 1843 | 0 | 0 |
 
 ## Quick start
 
@@ -302,13 +302,17 @@ Two pieces are in place.
 
 **Model selection.** The platform detects what the host can run, picks a model, and reports it at
 `GET /api/ai/status` and in the header. It chooses against the memory actually available rather than
-the memory installed, and every figure it compares against counts the weights plus the working
-context plus room for the host, because a recommendation that only counts the weights is how a model
-server gets killed the moment it loads. The ranked ladder is a recommendation, not a permitted list:
-any model already on the server that fits the host is used as it is. The ladder is ordered
-differently for CPU and GPU, because a mixture of experts model activates a fraction of its
-parameters per token and so beats a dense model of the same size on a processor while losing to it on
-a card.
+the memory installed, counts the weights plus the working context plus room for the host, and counts
+the processor as well: fitting in memory is not the same as being worth waiting for, since a dense
+14B on two threads loads for two minutes and then produces about one token a second. The ranked
+ladder is a recommendation, not a permitted list: any model already on the server that fits the host
+is used as it is. It is ordered differently for CPU and GPU, because a mixture of experts model
+activates a fraction of its parameters per token and so beats a dense model of the same size on a
+processor while losing to it on a card.
+
+The model is loaded before anything is timed against it, under its own budget. Ollama loads on the
+first request that needs the model, inside that request, and a client that gives up while it loads
+leaves the server abandoning the load, so every retry starts a load that can never finish.
 
 **Behavioural profiling, with no model at all.** Every hunt now also profiles each host, account,
 process, address, destination and client, compares each entity only against entities of the same kind
@@ -359,6 +363,8 @@ THF_CTI_DAY               weekday to collect on, 0 is Monday, default 6
 THF_CTI_HOUR              hour to collect at, UTC, default 2
 THF_CTI_MAX_CANDIDATES    hypotheses proposed per run, default 25
 THF_AI_MAX_CALLS          model calls per hunt for adjudication, default 60
+THF_AI_LOAD_TIMEOUT       seconds allowed for the server to load a model, default 1200
+THF_AI_KEEP_ALIVE         how long the server keeps it resident, default 30m
 ```
 
 ## Checking it end to end

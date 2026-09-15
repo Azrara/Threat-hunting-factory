@@ -174,10 +174,15 @@ class FakeModel:
         self.raw = raw
         self.calls = 0
         self.prompts: list[list[dict]] = []
+        self.warm_calls = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.fail:
             raise httpx.ConnectError("no model server")
+        if request.url.path == "/api/generate":
+            # The client loads the model before it times anything against it.
+            self.warm_calls += 1
+            return httpx.Response(200, json={"model": "test-model", "done": True})
         payload = json.loads(request.content)
         self.calls += 1
         self.prompts.append(payload["messages"])

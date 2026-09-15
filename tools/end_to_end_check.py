@@ -129,7 +129,7 @@ learn how the platform fits alongside what you already run, for teams of every s
 starts lower than ever. Register now for the webinar and our team will walk you through it all.</p>
 </article></body></html>"""
 
-MODEL_STATE = {"chat_calls": 0, "prompts": []}
+MODEL_STATE = {"chat_calls": 0, "warm_calls": 0, "prompts": []}
 
 
 def make_publication(port: int) -> HTTPServer:
@@ -247,6 +247,10 @@ def make_model_server(port: int) -> HTTPServer:
 
         def do_POST(self) -> None:
             payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            if self.path == "/api/generate":
+                MODEL_STATE["warm_calls"] = MODEL_STATE.get("warm_calls", 0) + 1
+                self._json({"model": payload.get("model", ""), "done": True})
+                return
             MODEL_STATE["chat_calls"] += 1
             body = payload["messages"][1]["content"]
             MODEL_STATE["prompts"].append(payload["messages"])

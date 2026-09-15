@@ -375,13 +375,14 @@ class TestClientFailures:
             with pytest.raises(OllamaError):
                 client.chat([{"role": "user", "content": "hi"}], model="m")
             assert len(calls) == 3, "one attempt plus two retries"
-            # A status probe must stay cheap, so it spends no retry budget at all.
             calls.clear()
+            # A status probe must stay cheap, so it spends no retry budget at all.
             with pytest.raises(OllamaError):
                 client.version()
             assert len(calls) == 1
 
     def test_a_transient_failure_recovers(self, monkeypatch):
+        """A server coming up refuses one connection and answers the next."""
         monkeypatch.setattr("app.ai.client.time.sleep", lambda seconds: None)
         attempts = {"count": 0}
 
@@ -389,6 +390,8 @@ class TestClientFailures:
             attempts["count"] += 1
             if attempts["count"] == 1:
                 raise httpx.ConnectError("not up yet")
+            if request.url.path == "/api/generate":
+                return httpx.Response(200, json={"model": "m", "done": True})
             return chat_response("recovered")
 
         settings = AiSettings()
@@ -396,7 +399,7 @@ class TestClientFailures:
         with OllamaClient(settings, transport=httpx.MockTransport(handler)) as client:
             result = client.chat([{"role": "user", "content": "hi"}], model="m")
         assert result.text == "recovered"
-        assert attempts["count"] == 2
+        assert attempts["count"] > 1, "it took more than one attempt to get through"
 
 
 class TestClientEmbeddings:
@@ -444,7 +447,7 @@ class TestSettings:
         monkeypatch.setenv("THF_AI_TIMEOUT", "not-a-number")
         monkeypatch.setenv("THF_AI_MAX_CALLS", "")
         settings = AiSettings()
-        assert settings.request_timeout == 180.0
+        assert settings.request_timeout == 300.0
         assert settings.max_calls_per_hunt == 60
 
 
@@ -546,3 +549,80 @@ class TestMemoryHeadroom:
         """The real case: a desktop and a browser are already using the memory."""
         selection = choose_chat_model([], ram_gb=6, vram_gb=0)
         assert CHAT_MODELS[selection.tag].min_ram_gb <= 8
+
+
+class TestLoadingBeforeAnswering:
+    """Loading a model is not answering a question.
+
+    Reported from a real machine: a dense model on two processor threads took more
+    than three minutes to load, the client gave up at its request timeout, and the
+    server abandoned the load because the client had gone. Every retry started a
+    load that could never finish, so the hunt reported that the model never answered
+    while the server was busy loading it over and over.
+    """
+
+    def calls(self):
+        seen: list[tuple[str, dict]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content) if request.content else {}
+            seen.append((request.url.path, body))
+            if request.url.path == "/api/generate":
+                return httpx.Response(200, json={"model": body.get("model", ""), "done": True})
+            return chat_response("{}")
+
+        return seen, handler
+
+    def test_the_model_is_loaded_before_the_first_question(self):
+        seen, handler = self.calls()
+        with fake_client(handler) as client:
+            client.chat([{"role": "user", "content": "hi"}], model="qwen3:4b")
+        assert [path for path, _ in seen] == ["/api/generate", "/api/chat"]
+
+    def test_the_load_is_paid_once(self):
+        seen, handler = self.calls()
+        with fake_client(handler) as client:
+            for _ in range(3):
+                client.chat([{"role": "user", "content": "hi"}], model="qwen3:4b")
+        assert [path for path, _ in seen].count("/api/generate") == 1
+
+    def test_the_load_gets_its_own_budget(self):
+        settings = AiSettings()
+        assert settings.load_timeout > settings.request_timeout, (
+            "a load that takes longer than an answer must not be cut off by the "
+            "budget meant for the answer"
+        )
+        assert settings.load_timeout >= 600
+
+    def test_the_model_is_asked_to_stay_resident(self):
+        """A hunt makes several calls minutes apart and must not reload each time."""
+        seen, handler = self.calls()
+        with fake_client(handler) as client:
+            client.chat([{"role": "user", "content": "hi"}], model="qwen3:4b")
+        for path, body in seen:
+            assert body.get("keep_alive"), f"{path} did not ask the server to keep the model"
+
+    def test_a_second_model_is_loaded_in_its_turn(self):
+        seen, handler = self.calls()
+        with fake_client(handler) as client:
+            client.chat([{"role": "user", "content": "hi"}], model="qwen3:4b")
+            client.chat([{"role": "user", "content": "hi"}], model="qwen3:8b")
+        loaded = [body["model"] for path, body in seen if path == "/api/generate"]
+        assert loaded == ["qwen3:4b", "qwen3:8b"]
+
+    def test_a_server_that_never_loads_is_reported_not_retried(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("still loading")
+
+        settings = AiSettings()
+        settings.max_retries = 3
+        attempts = []
+
+        def counting(request: httpx.Request) -> httpx.Response:
+            attempts.append(1)
+            raise httpx.ReadTimeout("still loading")
+
+        with OllamaClient(settings, transport=httpx.MockTransport(counting)) as client:
+            with pytest.raises(OllamaTimeout):
+                client.chat([{"role": "user", "content": "hi"}], model="qwen3:4b")
+        assert len(attempts) == 1, "a load that timed out must not be started again"

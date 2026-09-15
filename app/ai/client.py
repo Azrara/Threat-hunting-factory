@@ -135,6 +135,8 @@ class OllamaClient:
             timeout=timeout,
             transport=transport,
         )
+        # Models this client has already made the server load.
+        self._warmed: set[str] = set()
 
     # -- lifecycle --------------------------------------------------------
 
@@ -149,16 +151,35 @@ class OllamaClient:
 
     # -- transport --------------------------------------------------------
 
-    def _request(self, method: str, path: str, payload: dict | None = None, *, retries: int | None = None) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        *,
+        retries: int | None = None,
+        timeout: float | None = None,
+        retry_timeouts: bool = True,
+    ) -> dict:
         attempts = self.settings.max_retries if retries is None else retries
         delay = 0.5
         last: Exception | None = None
         for attempt in range(attempts + 1):
             try:
-                response = self._http.request(method, path, json=payload)
+                response = self._http.request(
+                    method, path, json=payload,
+                    timeout=None if timeout is None else httpx.Timeout(
+                        timeout, connect=self.settings.connect_timeout
+                    ),
+                )
             except httpx.TimeoutException as error:
                 last = OllamaTimeout(f"{self.settings.base_url} did not answer in time")
                 last.__cause__ = error
+                if not retry_timeouts:
+                    # A load that ran out of time will not go faster for being asked
+                    # again, and asking again makes the server abandon the load it
+                    # had already started. Report it instead.
+                    raise last from error
             except httpx.HTTPError as error:
                 last = OllamaUnavailable(f"{self.settings.base_url} is not reachable: {error}")
                 last.__cause__ = error
@@ -218,6 +239,26 @@ class OllamaClient:
 
     # -- inference --------------------------------------------------------
 
+    def warm(self, model: str) -> bool:
+        """Make the server load the model before anything is timed against it.
+
+        Ollama loads on the first request that needs the model, inside that
+        request. A client that gives up while it loads leaves the server abandoning
+        the load, so the next attempt starts again from nothing and never converges.
+        Loading it first, under its own budget, is what breaks that loop.
+        """
+        if model in self._warmed:
+            return True
+        # A blip while the server is coming up is worth another try. A load that
+        # ran out of time is not.
+        self._request(
+            "POST", "/api/generate",
+            {"model": model, "prompt": "", "keep_alive": self.settings.keep_alive},
+            timeout=self.settings.load_timeout, retry_timeouts=False,
+        )
+        self._warmed.add(model)
+        return True
+
     def chat(
         self,
         messages: list[dict[str, str]],
@@ -239,10 +280,13 @@ class OllamaClient:
             "messages": messages,
             "stream": False,
             "options": options,
+            "keep_alive": self.settings.keep_alive,
         }
         if schema is not None:
             payload["format"] = schema
 
+        # The load happens here, once, under a budget that expects it.
+        self.warm(model)
         started = time.monotonic()
         body = self._request("POST", "/api/chat", payload)
         message = body.get("message") or {}

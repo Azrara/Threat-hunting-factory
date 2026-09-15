@@ -67,10 +67,15 @@ class FakeModel:
         self.fail = fail
         self.calls = 0
         self.prompts: list[list[dict]] = []
+        self.warm_calls = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.fail:
             raise httpx.ConnectError("no model server")
+        if request.url.path == "/api/generate":
+            # The client loads the model before it times anything against it.
+            self.warm_calls += 1
+            return httpx.Response(200, json={"model": "test-model", "done": True})
         payload = json.loads(request.content)
         self.calls += 1
         self.prompts.append(payload["messages"])
@@ -385,17 +390,36 @@ class TestTextHygiene:
 # ---------------------------------------------------------------------------
 
 
+def wait_for_ai(client, headers, hunt_id, timeout=120):
+    """Wait for the model stage to settle.
+
+    A hunt is marked complete before the model stage runs, deliberately, so that a
+    slow model never delays the report. A test that asserts on the outcome of that
+    stage has to wait for it rather than for the hunt.
+    """
+    import time
+
+    deadline = time.time() + timeout
+    hunt = {}
+    while time.time() < deadline:
+        hunt = client.get(f"/api/hunts/{hunt_id}", headers=headers).json()
+        if hunt["status"] in ("completed", "failed") and hunt["ai_status"] not in (
+            "pending", "running"
+        ):
+            return hunt
+        time.sleep(0.2)
+    raise AssertionError(f"the model stage never settled: {hunt.get('ai_status')}")
+
+
 class TestInsideAHunt:
     def test_a_hunt_records_why_there_was_no_model_assessment(self, workspace, sample_archive):
         """The suite runs with no model server, which is the common deployment too."""
-        from tests.test_api import wait_for_completion
-
         client, headers = workspace["client"], workspace["headers"]
         with open(sample_archive, "rb") as handle:
             created = client.post("/api/hunts", headers=headers,
                 files={"file": ("evidence.zip", handle, "application/zip")},
                 data={"hypothesis_id": "math-full-spectrum", "title": "No model"}).json()
-        hunt = wait_for_completion(client, headers, created["id"])
+        hunt = wait_for_ai(client, headers, created["id"])
         assert hunt["status"] == "completed"
         assert hunt["ai_status"] in ("unavailable", "skipped")
         assert hunt["ai_detail"]

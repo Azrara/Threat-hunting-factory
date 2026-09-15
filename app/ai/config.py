@@ -34,6 +34,11 @@ class ModelChoice:
     min_vram_gb: int  # video memory needed to run fully on GPU
     licence: str
     note: str
+    # Processor threads needed for an answer to arrive in a usable time. Fitting in
+    # memory is not the same as being worth waiting for: a dense 14B on two threads
+    # loads for two minutes and then produces about one token a second, which is
+    # twenty minutes for a single adjudication. Only counted when there is no GPU.
+    min_cpu_threads: int = 2
 
     @property
     def is_mixture_of_experts(self) -> bool:
@@ -46,37 +51,45 @@ CHAT_MODELS: dict[str, ModelChoice] = {
         ModelChoice(
             "gpt-oss:120b", "GPT OSS 120B", "120B", "5.1B", 80, 80, "Apache 2.0",
             "Best quality in this list. Needs a server class accelerator or a very large host.",
+            min_cpu_threads=16,
         ),
         ModelChoice(
             "qwen3:32b", "Qwen3 32B", "32B", "32B", 28, 24, "Apache 2.0",
             "Best dense model that fits a single 24 GB card. Slow on CPU.",
+            min_cpu_threads=16,
         ),
         ModelChoice(
             "qwen3:30b-a3b", "Qwen3 30B A3B", "30B", "3B", 26, 20, "Apache 2.0",
             "Mixture of experts: 30B of knowledge at the speed of a 3B model. "
             "The best choice when there is no GPU but plenty of memory.",
+            min_cpu_threads=6,
         ),
         ModelChoice(
             "gpt-oss:20b", "GPT OSS 20B", "20B", "3.6B", 20, 16, "Apache 2.0",
             "Mixture of experts, strong at structured output.",
+            min_cpu_threads=4,
         ),
         ModelChoice(
             "qwen3:14b", "Qwen3 14B", "14B", "14B", 16, 12, "Apache 2.0",
             "Dense, and the largest that is sensible without a card. A 16 GB host "
             "running anything else alongside will struggle.",
+            min_cpu_threads=8,
         ),
         ModelChoice(
             "qwen3:8b", "Qwen3 8B", "8B", "8B", 11, 8, "Apache 2.0",
             "Comfortable on a 16 GB laptop or a small virtual machine.",
+            min_cpu_threads=4,
         ),
         ModelChoice(
             "qwen3:4b", "Qwen3 4B", "4B", "4B", 8, 6, "Apache 2.0",
             "The smallest that still holds a JSON schema. For a virtual machine with "
             "little memory to spare, this is the one that works.",
+            min_cpu_threads=2,
         ),
         ModelChoice(
             "llama3.1:8b", "Llama 3.1 8B", "8B", "8B", 11, 8, "Meta Llama 3.1 Community",
             "Last resort. Check the licence before shipping this to a client.",
+            min_cpu_threads=4,
         ),
     )
 }
@@ -251,6 +264,14 @@ def detect_ram_gb() -> int:
         return 0
 
 
+def detect_cpu_threads() -> int:
+    """Processor threads this host can give a model, never fewer than one."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
 def detect_vram_gb(runner=None) -> int:
     """Largest single GPU memory in whole gigabytes, or 0 when there is no GPU.
 
@@ -306,8 +327,11 @@ def choose_chat_model(
     ram_gb: int,
     vram_gb: int,
     override: str = "",
+    cpu_threads: int = 0,
 ) -> ModelSelection:
-    return _choose(installed, ram_gb, vram_gb, override, CHAT_MODELS, _ladder_for(vram_gb), False)
+    return _choose(
+        installed, ram_gb, vram_gb, override, CHAT_MODELS, _ladder_for(vram_gb), False, cpu_threads
+    )
 
 
 def choose_embedding_model(
@@ -315,8 +339,10 @@ def choose_embedding_model(
     ram_gb: int,
     vram_gb: int,
     override: str = "",
+    cpu_threads: int = 0,
 ) -> ModelSelection:
-    return _choose(installed, ram_gb, vram_gb, override, EMBED_MODELS, EMBED_LADDER, True)
+    # An embedding is one short forward pass, so processor width barely matters.
+    return _choose(installed, ram_gb, vram_gb, override, EMBED_MODELS, EMBED_LADDER, True, 0)
 
 
 def _ladder_for(vram_gb: int) -> tuple[str, ...]:
@@ -331,6 +357,7 @@ def _choose(
     catalogue: dict[str, ModelChoice],
     ladder: tuple[str, ...],
     wants_embedding: bool,
+    cpu_threads: int = 0,
 ) -> ModelSelection:
     installed = as_installed(entries)
     if override:
@@ -349,15 +376,24 @@ def _choose(
 
     def runnable(tag: str) -> bool:
         choice = catalogue[tag]
-        # On a GPU the weights live in video memory. On CPU they live in system
-        # memory, so the two ladders are filtered against different budgets.
-        return choice.min_vram_gb <= vram_gb if on_gpu else choice.min_ram_gb <= ram_gb
+        if on_gpu:
+            # On a GPU the weights live in video memory and the card does the work.
+            return choice.min_vram_gb <= vram_gb
+        # On CPU the weights live in system memory and the processor does the work,
+        # so both have to be there. A host with two threads can hold a 14B and will
+        # still never finish an answer worth waiting for.
+        if choice.min_ram_gb > ram_gb:
+            return False
+        return not cpu_threads or choice.min_cpu_threads <= cpu_threads
 
     fitting = [tag for tag in ladder if runnable(tag)]
 
     for position, tag in enumerate(fitting):
         if _is_installed(tag, installed):
-            where = f"{vram_gb} GB of video memory" if on_gpu else f"{ram_gb} GB of memory"
+            where = (
+                f"{vram_gb} GB of video memory" if on_gpu
+                else f"{ram_gb} GB of memory and {cpu_threads or '?'} processor threads"
+            )
             # Something better fits this host but is not pulled yet. Say so rather
             # than silently settling: pulling it is one command.
             upgrade = fitting[0] if position else ""
@@ -407,7 +443,10 @@ def _choose(
 
     # Nothing fits. Offer the least demanding entry, preferring the one earlier in
     # the ladder when two are equally light, so a permissive licence wins the tie.
-    cost = (lambda tag: catalogue[tag].min_vram_gb) if on_gpu else (lambda tag: catalogue[tag].min_ram_gb)
+    cost = (
+        (lambda tag: (catalogue[tag].min_vram_gb, 0)) if on_gpu
+        else (lambda tag: (catalogue[tag].min_ram_gb, catalogue[tag].min_cpu_threads))
+    )
     smallest = min(ladder, key=lambda tag: (cost(tag), ladder.index(tag)))
     return ModelSelection(
         tag=smallest,
@@ -452,7 +491,15 @@ class AiSettings:
         # A connect attempt must fail fast: the interface asks for status on every
         # page and a hunt must never wait on an absent server.
         self.connect_timeout: float = _env_float("THF_AI_CONNECT_TIMEOUT", 2.0)
-        self.request_timeout: float = _env_float("THF_AI_TIMEOUT", 180.0)
+        self.request_timeout: float = _env_float("THF_AI_TIMEOUT", 300.0)
+        # Loading a model is not answering a question. On a processor with few
+        # threads a dense model takes minutes to load, and cutting the connection
+        # while it loads makes the server abandon the load, so every retry starts a
+        # load that can never finish. The load gets its own, generous budget.
+        self.load_timeout: float = _env_float("THF_AI_LOAD_TIMEOUT", 1200.0)
+        # How long the server keeps the model resident between calls. A hunt makes
+        # several calls minutes apart and must not pay the load each time.
+        self.keep_alive: str = os.environ.get("THF_AI_KEEP_ALIVE", "30m")
         self.max_retries: int = _env_int("THF_AI_MAX_RETRIES", 2)
         self.max_calls_per_hunt: int = _env_int("THF_AI_MAX_CALLS", 60)
         self.status_cache_seconds: float = _env_float("THF_AI_STATUS_CACHE_SECONDS", 30.0)

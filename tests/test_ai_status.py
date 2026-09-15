@@ -258,3 +258,43 @@ class TestNothingDependsOnTheAiLayer:
 
     def test_the_unavailable_exception_is_catchable_as_the_base(self):
         assert issubclass(OllamaUnavailable, Exception)
+
+
+class TestProcessorWidth:
+    """Fitting in memory is not the same as being worth waiting for.
+
+    Reported from a real machine with twenty two gigabytes and two processor
+    threads: the platform chose a dense 14B because it fitted, the server took over
+    three minutes to load it, and one adjudication would have taken twenty.
+    """
+
+    TWO_THREADS = {"ram_gb": 20, "total_ram_gb": 22, "vram_gb": 0,
+                   "cpu_threads": 2, "accelerator": "cpu"}
+
+    def test_a_narrow_processor_gets_a_small_model(self):
+        status = build_status(
+            client=client_for(server(["qwen3:14b", "qwen3:4b"])), hardware=self.TWO_THREADS
+        )
+        assert status["model"]["tag"] == "qwen3:4b"
+        assert status["ready"] is True
+
+    def test_the_same_memory_with_more_threads_gets_more(self):
+        wide = {**self.TWO_THREADS, "cpu_threads": 8}
+        status = build_status(client=client_for(server(["qwen3:14b", "qwen3:4b"])), hardware=wide)
+        assert status["model"]["tag"] == "qwen3:14b"
+
+    def test_the_processor_is_reported(self):
+        status = build_status(client=client_for(server([])), hardware=self.TWO_THREADS)
+        assert status["hardware"]["cpu_threads"] == 2
+
+    def test_a_host_that_cannot_run_anything_says_why(self):
+        tiny = {"ram_gb": 2, "total_ram_gb": 2, "vram_gb": 0, "cpu_threads": 1,
+                "accelerator": "cpu"}
+        status = build_status(client=client_for(server([])), hardware=tiny)
+        assert "processor threads" in status["degraded_reason"]
+
+    def test_a_graphics_card_makes_the_processor_irrelevant(self):
+        gpu = {"ram_gb": 20, "total_ram_gb": 22, "vram_gb": 24, "cpu_threads": 2,
+               "accelerator": "gpu"}
+        status = build_status(client=client_for(server(["qwen3:32b"])), hardware=gpu)
+        assert status["model"]["tag"] == "qwen3:32b", "the card does the work, not the processor"

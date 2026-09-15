@@ -16,6 +16,7 @@ from .config import (
     choose_chat_model,
     choose_embedding_model,
     detect_available_ram_gb,
+    detect_cpu_threads,
     detect_ram_gb,
     detect_vram_gb,
 )
@@ -35,6 +36,7 @@ def _hardware() -> dict:
         "ram_gb": available,
         "total_ram_gb": total,
         "vram_gb": vram,
+        "cpu_threads": detect_cpu_threads(),
         "accelerator": "gpu" if vram else "cpu",
     }
 
@@ -59,7 +61,10 @@ def build_status(
 
     if not settings.enabled:
         status["degraded_reason"] = "The AI layer is disabled by configuration"
-        status["model"] = choose_chat_model([], host["ram_gb"], host["vram_gb"], settings.model_override).to_dict()
+        status["model"] = choose_chat_model(
+            [], host["ram_gb"], host["vram_gb"], settings.model_override,
+            host.get("cpu_threads", 0),
+        ).to_dict()
         status["embedding_model"] = choose_embedding_model(
             [], host["ram_gb"], host["vram_gb"], settings.embedding_override
         ).to_dict()
@@ -85,7 +90,10 @@ def build_status(
             client.close()
 
     status["installed_models"] = [entry["name"] for entry in installed]
-    chat = choose_chat_model(installed, host["ram_gb"], host["vram_gb"], settings.model_override)
+    chat = choose_chat_model(
+        installed, host["ram_gb"], host["vram_gb"], settings.model_override,
+        host.get("cpu_threads", 0),
+    )
     embedding = choose_embedding_model(
         installed, host["ram_gb"], host["vram_gb"], settings.embedding_override
     )
@@ -101,8 +109,10 @@ def build_status(
         if not chat.fits:
             status["degraded_reason"] = (
                 f"This host cannot comfortably run any model in the ladder: "
-                f"{host['ram_gb']} GB of memory is available and the smallest needs "
-                f"{(chat.choice.min_ram_gb if chat.choice else 0)} GB"
+                f"{host['ram_gb']} GB of memory is available and "
+                f"{host.get('cpu_threads', 0)} processor threads, and the smallest "
+                f"entry needs {(chat.choice.min_ram_gb if chat.choice else 0)} GB "
+                f"and {(chat.choice.min_cpu_threads if chat.choice else 0)} threads"
             )
         elif not chat.installed:
             status["degraded_reason"] = (
