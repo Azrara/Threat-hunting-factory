@@ -25,6 +25,8 @@ from .config import AiSettings, ai_settings
 # Reasoning models wrap their scratchpad in these. It must never reach a JSON parser.
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+# What a second attempt is given when the first produced only reasoning.
+MAX_OUTPUT_TOKENS = 1200
 
 
 class OllamaError(RuntimeError):
@@ -50,6 +52,8 @@ class ChatResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     duration_ms: int = 0
+    # Reasoning models answer in two parts. This is the part that is not the answer.
+    thinking: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -72,6 +76,7 @@ def extract_json(text: str) -> Any:
     cleaned = strip_reasoning(text)
     if not cleaned:
         raise OllamaProtocolError("The model returned an empty answer")
+
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
@@ -267,6 +272,7 @@ class OllamaClient:
         schema: dict | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        think: bool | None = None,
     ) -> ChatResult:
         options: dict[str, Any] = {
             "temperature": self.settings.temperature if temperature is None else temperature,
@@ -284,6 +290,8 @@ class OllamaClient:
         }
         if schema is not None:
             payload["format"] = schema
+        if think is not None:
+            payload["think"] = think
 
         # The load happens here, once, under a budget that expects it.
         self.warm(model)
@@ -298,6 +306,7 @@ class OllamaClient:
             prompt_tokens=int(body.get("prompt_eval_count", 0) or 0),
             completion_tokens=int(body.get("eval_count", 0) or 0),
             duration_ms=int((time.monotonic() - started) * 1000),
+            thinking=str(message.get("thinking", "") or ""),
             raw=body,
         )
 
@@ -309,8 +318,41 @@ class OllamaClient:
         schema: dict,
         max_tokens: int | None = None,
     ) -> tuple[Any, ChatResult]:
-        """Ask for schema bound output and return the parsed value with the call stats."""
-        result = self.chat(messages, model=model, schema=schema, max_tokens=max_tokens)
+        """Ask for schema bound output and return the parsed value with the call stats.
+
+        Reasoning models answer in two parts, the reasoning and the answer, and both
+        come out of the same budget of tokens. A model that reasons at length about a
+        hard question can spend the whole budget before writing any answer, and what
+        arrives is an empty string. Asking for the answer without the reasoning is
+        the fix, with a larger budget as the fallback when a model insists.
+        """
+        try:
+            result = self.chat(
+                messages, model=model, schema=schema, max_tokens=max_tokens, think=False
+            )
+        except OllamaProtocolError as error:
+            if "400" not in str(error):
+                raise
+            # The model has no notion of thinking and rejects being told not to.
+            result = self.chat(messages, model=model, schema=schema, max_tokens=max_tokens)
+
+        if strip_reasoning(result.text):
+            return extract_json(result.text), result
+
+        if result.thinking or result.completion_tokens >= (max_tokens or 0) > 0:
+            # It answered with reasoning and nothing else, or it ran out of budget
+            # mid answer. Give it room rather than reporting an empty answer.
+            retry = self.chat(
+                messages, model=model, schema=schema,
+                max_tokens=(max_tokens or MAX_OUTPUT_TOKENS) * 3, think=False,
+            )
+            if strip_reasoning(retry.text):
+                return extract_json(retry.text), retry
+            raise OllamaProtocolError(
+                f"{model} produced {retry.completion_tokens} tokens of reasoning and no answer. "
+                "A model that reasons at length needs a larger budget, or a model that "
+                "answers directly."
+            )
         return extract_json(result.text), result
 
     def embed(self, texts: list[str], *, model: str) -> list[list[float]]:

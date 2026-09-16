@@ -30,7 +30,9 @@ PROMPT_VERSION = "analyst-adjudicate-1"
 CANDIDATES_PER_CALL = 5
 MAX_EVIDENCE_PER_CANDIDATE = 3
 MAX_EXCERPT_LENGTH = 600
-MAX_OUTPUT_TOKENS = 1400
+# Five candidates, eleven fields each. A budget that only just covers a perfect
+# answer leaves nothing for a model that phrases things at length.
+MAX_OUTPUT_TOKENS = 2400
 MAX_TEXT_FIELD = 700
 
 DATA_START = "<<<EVIDENCE DATA START>>>"

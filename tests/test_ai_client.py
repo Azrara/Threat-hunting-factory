@@ -626,3 +626,100 @@ class TestLoadingBeforeAnswering:
             with pytest.raises(OllamaTimeout):
                 client.chat([{"role": "user", "content": "hi"}], model="qwen3:4b")
         assert len(attempts) == 1, "a load that timed out must not be started again"
+
+
+class TestAModelThatReasons:
+    """Reasoning models answer in two parts, and both come out of one budget.
+
+    Reported from a real machine: qwen3:4b produced its reasoning, spent the whole
+    token budget doing it, and returned an empty answer. The platform said "the
+    model returned an empty answer", which is true and useless.
+    """
+
+    def server(self, *responses):
+        """Answer each chat call with the next scripted response."""
+        seen: list[dict] = []
+        remaining = list(responses)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content) if request.content else {}
+            if request.url.path == "/api/generate":
+                return httpx.Response(200, json={"model": body.get("model", ""), "done": True})
+            seen.append(body)
+            reply = remaining.pop(0) if remaining else responses[-1]
+            if isinstance(reply, int):
+                return httpx.Response(reply, text="model does not support thinking")
+            return httpx.Response(200, json={
+                "model": body["model"], "message": reply,
+                "prompt_eval_count": 900, "eval_count": reply.get("_tokens", 100), "done": True,
+            })
+
+        return seen, handler
+
+    def test_the_reasoning_is_asked_for_separately(self):
+        seen, handler = self.server({"role": "assistant", "content": '{"a": 1}'})
+        with fake_client(handler) as client:
+            client.chat_json([{"role": "user", "content": "hi"}], model="qwen3:4b", schema={})
+        assert seen[0]["think"] is False, "structured output does not want prose reasoning"
+
+    def test_an_answer_that_is_all_reasoning_is_asked_again_with_room(self):
+        seen, handler = self.server(
+            {"role": "assistant", "content": "", "thinking": "Let me consider this at length.",
+             "_tokens": 1400},
+            {"role": "assistant", "content": '{"verdicts": []}'},
+        )
+        with fake_client(handler) as client:
+            value, _ = client.chat_json(
+                [{"role": "user", "content": "hi"}], model="qwen3:4b", schema={}, max_tokens=1400
+            )
+        assert value == {"verdicts": []}
+        assert len(seen) == 2
+        assert seen[1]["options"]["num_predict"] > seen[0]["options"]["num_predict"]
+
+    def test_an_answer_cut_off_at_the_budget_is_asked_again(self):
+        """No thinking reported, but it used every token it was given and said nothing."""
+        seen, handler = self.server(
+            {"role": "assistant", "content": "", "_tokens": 900},
+            {"role": "assistant", "content": '{"a": 2}'},
+        )
+        with fake_client(handler) as client:
+            value, _ = client.chat_json(
+                [{"role": "user", "content": "hi"}], model="m", schema={}, max_tokens=900
+            )
+        assert value == {"a": 2}
+
+    def test_a_model_that_only_ever_reasons_is_reported_usefully(self):
+        seen, handler = self.server(
+            {"role": "assistant", "content": "", "thinking": "thinking", "_tokens": 1400},
+            {"role": "assistant", "content": "", "thinking": "still thinking", "_tokens": 4200},
+        )
+        with fake_client(handler) as client:
+            with pytest.raises(OllamaProtocolError) as error:
+                client.chat_json(
+                    [{"role": "user", "content": "hi"}], model="qwen3:4b", schema={}, max_tokens=1400
+                )
+        message = str(error.value)
+        assert "reasoning and no answer" in message
+        assert "4200" in message, "the reader needs to know it was not silence"
+        assert "qwen3:4b" in message
+
+    def test_a_model_that_rejects_being_told_not_to_think_still_works(self):
+        seen, handler = self.server(400, {"role": "assistant", "content": '{"a": 3}'})
+        with fake_client(handler) as client:
+            value, _ = client.chat_json([{"role": "user", "content": "hi"}], model="m", schema={})
+        assert value == {"a": 3}
+        assert "think" not in seen[1], "the second attempt drops what the model refused"
+
+    def test_the_reasoning_is_kept_for_diagnosis(self):
+        seen, handler = self.server(
+            {"role": "assistant", "content": '{"a": 1}', "thinking": "a short thought"}
+        )
+        with fake_client(handler) as client:
+            _, result = client.chat_json([{"role": "user", "content": "hi"}], model="m", schema={})
+        assert result.thinking == "a short thought"
+
+    def test_a_good_answer_costs_one_call(self):
+        seen, handler = self.server({"role": "assistant", "content": '{"a": 1}'})
+        with fake_client(handler) as client:
+            client.chat_json([{"role": "user", "content": "hi"}], model="m", schema={})
+        assert len(seen) == 1

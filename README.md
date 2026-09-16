@@ -4,7 +4,7 @@ An end to end platform that automates hypothesis driven threat hunting: pick the
 the evidence, and get a complete report with observations, original log extracts, cyber risk, cyber
 impact and recommendations. Access is scoped per tenant and per user.
 
-![status](https://img.shields.io/badge/tests-1843%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
+![status](https://img.shields.io/badge/tests-1850%20passing-86BC25) ![detections](https://img.shields.io/badge/detections-136-000000) ![techniques](https://img.shields.io/badge/ATT%26CK%20techniques-96-000000)
 
 ## What it does
 
@@ -32,9 +32,9 @@ them, so a version difference cannot hide a failure:
 
 | Version | Tests | Failures | Skipped |
 |---------|-------|----------|---------|
-| 3.11 | 1843 | 0 | 0 |
-| 3.12 | 1843 | 0 | 0 |
-| 3.13 | 1843 | 0 | 0 |
+| 3.11 | 1850 | 0 | 0 |
+| 3.12 | 1850 | 0 | 0 |
+| 3.13 | 1850 | 0 | 0 |
 
 ## Quick start
 
@@ -313,6 +313,11 @@ processor while losing to it on a card.
 The model is loaded before anything is timed against it, under its own budget. Ollama loads on the
 first request that needs the model, inside that request, and a client that gives up while it loads
 leaves the server abandoning the load, so every retry starts a load that can never finish.
+
+Reasoning models answer in two parts, the reasoning and the answer, and both come out of one budget
+of tokens. A model that reasons at length can spend the whole budget before writing any answer, so
+schema bound calls ask for the answer without the reasoning, and fall back to a larger budget when a
+model insists on reasoning anyway.
 
 **Behavioural profiling, with no model at all.** Every hunt now also profiles each host, account,
 process, address, destination and client, compares each entity only against entities of the same kind
