@@ -1079,3 +1079,139 @@ class TestCollectorApi:
         decisions = {item["title"]: item["decision"] for item in items}
         assert "extracted" in decisions.values()
         assert "irrelevant" in decisions.values()
+
+
+class TestDeferredArticles:
+    """An article kept for a later run has to be looked at by one.
+
+    Reported from a real machine: the first collection ran while the model was
+    broken, every article was recorded as kept for a later run, and every run since
+    read nothing at all. The deferral was a quiet way of losing them, because the
+    next run's window starts after they were published so no feed would offer them
+    again.
+    """
+
+    def test_a_run_without_a_model_defers_rather_than_decides(self, db):
+        one_source(db)
+        web = wired_web()
+        with web.client() as http:
+            context = RunContext(db=db, http=http, settings=settings_for())
+            run_collection(context, trigger="manual")
+        rows = {row.canonical_url: row for row in db.query(CollectedArticle).all()}
+        report = rows["https://blog.example/report"]
+        assert report.decision == "fetched"
+        assert "no model" in report.reason
+        assert report.attempts == 1
+
+    def test_the_later_run_actually_looks_at_it(self, db):
+        one_source(db)
+        web = wired_web()
+        with web.client() as http:
+            run_collection(RunContext(db=db, http=http, settings=settings_for()), "manual")
+        assert db.query(GeneratedHypothesis).count() == 0
+
+        # The feeds now offer nothing new at all, as they would a week later.
+        later = FakeWeb().route(
+            "https://blog.example/feed/", feed_xml([]), "application/rss+xml"
+        ).route("https://blog.example/report", ARTICLE_HTML.encode())
+        record, model = execute(db, later)
+        assert record.articles_fetched >= 1, "the deferred article was never looked at again"
+        assert record.candidates_created >= 1
+        assert model.calls >= 1
+
+    def test_a_decided_article_is_never_read_twice(self, db):
+        """Even when the feed offers it again, which busy publishers do."""
+        one_source(db)
+        execute(db, wired_web())
+        first = db.query(CollectedArticle).filter_by(
+            canonical_url="https://blog.example/report").one()
+        assert first.decision == "extracted"
+
+        reoffered = wired_web().route("https://blog.example/feed/", feed_xml([
+            ("From phishing to domain wide ransomware", "https://blog.example/report", rfc822(-0.01)),
+        ]), "application/rss+xml")
+        record, model = execute(db, reoffered)
+        assert record.articles_fetched == 0
+        assert record.articles_skipped >= 1
+        assert model.calls == 0
+
+    def test_a_marketing_post_is_decided_and_stays_decided(self, db):
+        one_source(db)
+        execute(db, wired_web())
+        execute(db, wired_web())
+        row = db.query(CollectedArticle).filter_by(
+            canonical_url="https://blog.example/marketing").one()
+        assert row.decision == "irrelevant"
+        assert row.attempts == 1, "a judgement does not need making twice"
+
+    def test_an_article_that_will_not_load_is_given_a_few_tries_and_no_more(self, db):
+        from app.ai.collector.runner import MAX_FETCH_ATTEMPTS
+
+        one_source(db)
+        web = wired_web()
+        del web.routes["https://blog.example/report"]
+        for _ in range(MAX_FETCH_ATTEMPTS + 2):
+            execute(db, web)
+        row = db.query(CollectedArticle).filter_by(
+            canonical_url="https://blog.example/report").one()
+        assert row.decision == "failed"
+        assert row.attempts == MAX_FETCH_ATTEMPTS
+
+    def test_a_robots_refusal_is_final(self, db):
+        """Being told not to read something is a decision, not a failure to retry."""
+        one_source(db)
+        web = wired_web()
+        web.route("https://blog.example/robots.txt",
+                  b"User-agent: *\nDisallow: /report", "text/plain")
+        execute(db, web)
+        execute(db, web)
+        row = db.query(CollectedArticle).filter_by(
+            canonical_url="https://blog.example/report").one()
+        assert row.decision == "skipped"
+        assert row.attempts == 1
+
+    def test_a_deferred_article_from_a_disabled_source_is_left_alone(self, db):
+        source = one_source(db)
+        web = wired_web()
+        with web.client() as http:
+            run_collection(RunContext(db=db, http=http, settings=settings_for()), "manual")
+        source.is_active = False
+        db.commit()
+        record, _ = execute(db, wired_web())
+        assert record.articles_fetched == 0
+
+    def test_the_run_says_how_many_it_had_already_handled(self, db):
+        one_source(db)
+        execute(db, wired_web())
+        reoffered = wired_web().route("https://blog.example/feed/", feed_xml([
+            ("From phishing to domain wide ransomware", "https://blog.example/report", rfc822(-0.01)),
+            ("Announcing our platform", "https://blog.example/marketing", rfc822(-0.01)),
+        ]), "application/rss+xml")
+        record, _ = execute(db, reoffered)
+        assert record.articles_skipped == 2
+        assert record.articles_fetched == 0
+
+    def test_a_run_with_nothing_offered_reads_nothing_and_says_nothing_new(self, db):
+        one_source(db)
+        execute(db, wired_web())
+        record, model = execute(db, wired_web())
+        assert record.articles_seen == 0, "the feeds have published nothing since"
+        assert record.articles_fetched == 0
+        assert model.calls == 0
+
+
+class TestTheCommandLine:
+    def test_the_record_survives_its_session(self, db, monkeypatch):
+        """Returning a live row and closing the session under it leaves the caller
+        holding something that raises on every attribute it touches."""
+        from app.ai.collector import schedule
+
+        one_source(db)
+        web = wired_web()
+        monkeypatch.setattr(schedule, "PoliteClient", lambda **kwargs: web.client())
+        monkeypatch.setattr(schedule, "SessionLocal", lambda: db)
+        monkeypatch.setattr(db, "close", lambda: None)
+        record = schedule.run_now("cli", settings_for())
+        assert record.status == "completed"
+        assert isinstance(record.articles_fetched, int)
+        assert isinstance(record.warnings, list)

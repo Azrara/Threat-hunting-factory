@@ -70,12 +70,21 @@ def last_started(db) -> datetime | None:
 
 
 def run_now(trigger: str = "manual", settings: AiSettings | None = None) -> CollectorRun:
-    """Execute one collection against the real network and the local model."""
+    """Execute one collection against the real network and the local model.
+
+    The record is detached from its session before it is returned, so a caller can
+    read what happened after the session is gone. Returning a live row and closing
+    the session under it leaves the caller holding something that raises on every
+    attribute it touches.
+    """
     settings = settings or ai_settings
     db = SessionLocal()
     try:
         with PoliteClient(respect_robots=settings.collector_respect_robots) as http:
-            return run_collection(RunContext(db=db, http=http, settings=settings), trigger)
+            record = run_collection(RunContext(db=db, http=http, settings=settings), trigger)
+            db.refresh(record)
+            db.expunge(record)
+            return record
     finally:
         db.close()
 

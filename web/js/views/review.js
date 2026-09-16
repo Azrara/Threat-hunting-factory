@@ -87,9 +87,20 @@ export async function renderReview(root) {
       metric(last.articles_fetched, "articles read"),
       metric(last.articles_relevant, "worth reading"),
       metric(last.candidates_created, "proposed"),
-      metric(last.duplicates_merged, "duplicates"),
+      metric(last.articles_skipped || 0, "already handled"),
       metric(last.model_calls, "model calls"),
     ]));
+
+    // A run that read nothing should say why rather than leave a row of zeros.
+    if (!last.articles_fetched && last.status === "completed") {
+      const why = last.sources_failed >= last.sources_polled && last.sources_polled
+        ? "Every source failed. Check the feed list below and whether this host can reach them."
+        : last.articles_skipped
+          ? `Nothing new. All ${last.articles_skipped} articles offered by these sources had ` +
+            "already been read and decided on in an earlier run."
+          : "Nothing new. These sources have published nothing since the previous run.";
+      collector.appendChild(el("div", { class: "notice", text: why }));
+    }
     const details = [
       `Last run ${last.status}, ${(last.started_at || "").slice(0, 16).replace("T", " ")} UTC`,
       last.model_name ? `using ${last.model_name}` : "with no model available",

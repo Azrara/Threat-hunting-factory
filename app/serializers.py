@@ -179,6 +179,7 @@ def collector_run_payload(row) -> dict:
         "sources_polled": row.sources_polled,
         "sources_failed": row.sources_failed,
         "articles_seen": row.articles_seen,
+        "articles_skipped": row.articles_skipped,
         "articles_fetched": row.articles_fetched,
         "articles_relevant": row.articles_relevant,
         "articles_extracted": row.articles_extracted,

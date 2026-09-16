@@ -267,9 +267,16 @@ class CollectedArticle(Base):
     source_slug: Mapped[str] = mapped_column(String(80), default="", index=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    # fetched, skipped, irrelevant, extracted, failed
+    # A decision is final when nothing a later run does would change it.
+    #   extracted  the model read it and proposed what it proposed
+    #   irrelevant it was read and judged not worth the model's time
+    #   skipped    robots.txt asked us not to read it
+    # These two are not final, and a later run reconsiders them:
+    #   fetched    read and deliberately deferred, usually for want of a model
+    #   failed     could not be read this time
     decision: Mapped[str] = mapped_column(String(24), default="fetched", index=True)
     reason: Mapped[str] = mapped_column(String(400), default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
     relevance_score: Mapped[float] = mapped_column(Float, default=0.0)
     characters: Mapped[int] = mapped_column(Integer, default=0)
     candidates_created: Mapped[int] = mapped_column(Integer, default=0)
@@ -295,6 +302,7 @@ class CollectorRun(Base):
     sources_polled: Mapped[int] = mapped_column(Integer, default=0)
     sources_failed: Mapped[int] = mapped_column(Integer, default=0)
     articles_seen: Mapped[int] = mapped_column(Integer, default=0)
+    articles_skipped: Mapped[int] = mapped_column(Integer, default=0)
     articles_fetched: Mapped[int] = mapped_column(Integer, default=0)
     articles_relevant: Mapped[int] = mapped_column(Integer, default=0)
     articles_extracted: Mapped[int] = mapped_column(Integer, default=0)

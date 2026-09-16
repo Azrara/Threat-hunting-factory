@@ -33,6 +33,10 @@ from .sources import load_sources
 MAX_REASON_LENGTH = 380
 # A run that never finished, older than this, was killed rather than is running.
 STALE_RUN_HOURS = 6
+# Decisions nothing a later run does would change.
+FINAL_DECISIONS = frozenset({"extracted", "irrelevant", "skipped"})
+# How many times an article that could not be read is tried again on later runs.
+MAX_FETCH_ATTEMPTS = 3
 
 
 @dataclass
@@ -160,6 +164,12 @@ def run(context: RunContext, trigger: str = "schedule") -> CollectorRun:
             if rotated and not first_run:
                 record.rotated_feeds = [*record.rotated_feeds, source.slug]
             pending.extend((source, item) for item in items)
+        # Articles a previous run deferred are picked up here rather than waiting
+        # for a feed to offer them again. It never will: the next run's window
+        # starts after they were published, so a deferral that relied on the feed
+        # was a quiet way of losing them.
+        carried = _deferred(db, [item.key for _, item in pending])
+        pending.extend(carried)
         record.articles_seen = len(pending)
         db.commit()
 
@@ -227,15 +237,27 @@ def _process(
             break
 
         key = canonical(item.url)
-        if db.scalar(select(CollectedArticle).where(CollectedArticle.canonical_url == key)):
-            continue  # seen in an earlier run, or earlier in this one
-
-        entry = CollectedArticle(
-            url=item.url[:1000], canonical_url=key[:1000], title=item.title[:400],
-            source_slug=source.slug, run_id=record.id,
-            published_at=item.published_at.replace(tzinfo=None) if item.published_at else None,
+        seen = db.scalar(
+            select(CollectedArticle).where(CollectedArticle.canonical_url == key)
         )
-        db.add(entry)
+        if seen is not None and not _worth_another_look(seen):
+            record.articles_skipped += 1
+            continue
+
+        if seen is not None:
+            # Deferred for want of a model, or unreadable last time. This is the
+            # later run it was kept for.
+            entry = seen
+            entry.run_id = record.id
+            entry.reason = ""
+        else:
+            entry = CollectedArticle(
+                url=item.url[:1000], canonical_url=key[:1000], title=item.title[:400],
+                source_slug=source.slug, run_id=record.id,
+                published_at=item.published_at.replace(tzinfo=None) if item.published_at else None,
+            )
+            db.add(entry)
+        entry.attempts = (entry.attempts or 0) + 1
 
         article = _read_article(context, item, entry)
         if article is None:
@@ -268,6 +290,45 @@ def _process(
 
         _extract_into(context, record, entry, article, item, model_client, model)
         db.commit()
+
+
+def _deferred(db: Session, already_pending: list[str]) -> list[tuple[FeedSource, feeds.FeedItem]]:
+    """Articles an earlier run read but did not finish with."""
+    rows = db.scalars(
+        select(CollectedArticle)
+        .where(CollectedArticle.decision.notin_(tuple(FINAL_DECISIONS)))
+        .order_by(CollectedArticle.created_at.desc())
+    )
+    pending: list[tuple[FeedSource, feeds.FeedItem]] = []
+    seen = set(already_pending)
+    for row in rows:
+        if row.canonical_url in seen or not _worth_another_look(row):
+            continue
+        seen.add(row.canonical_url)
+        source = db.scalar(select(FeedSource).where(FeedSource.slug == row.source_slug))
+        if source is None or not source.is_active:
+            continue
+        published = row.published_at
+        if published is not None and published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        pending.append(
+            (source, feeds.FeedItem(title=row.title, url=row.url, published_at=published))
+        )
+    return pending
+
+
+def _worth_another_look(entry: CollectedArticle) -> bool:
+    """Whether a later run should reconsider an article it has already seen.
+
+    An article kept for a later run has to actually be looked at by one, or the
+    deferral is a quiet way of losing it. A read that failed is worth a few more
+    tries and then no more.
+    """
+    if entry.decision in FINAL_DECISIONS:
+        return False
+    if entry.decision == "failed":
+        return (entry.attempts or 0) < MAX_FETCH_ATTEMPTS
+    return True
 
 
 def _read_article(
